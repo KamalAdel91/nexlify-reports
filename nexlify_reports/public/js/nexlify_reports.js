@@ -156,16 +156,28 @@ nexlify_reports.observe_datatable = function (datatable) {
 	const bodyEl = $(datatable.wrapper).find(".dt-scrollable")[0];
 	if (!bodyEl) return;
 
+	// Detect a genuine data refresh (new filter, Refresh, Rebuild, reload)
+	// vs. virtual-scroll DOM churn: a real refresh clears the table down to
+	// (near) zero rows before repopulating; plain scrolling never empties
+	// it, it just slides the visible window. Only trigger autofit on that
+	// empty -> full transition, once per transition.
 	let debounceTimer = null;
+	let sawEmpty = false;
+
 	const observer = new MutationObserver(() => {
-		if (datatable.__nexlify_applying) return;
+		const rowCount = $(datatable.wrapper).find(".dt-row[data-row-index]").length;
+
+		if (rowCount <= 1) {
+			sawEmpty = true;
+			return;
+		}
+
+		if (!sawEmpty) return;
+
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
-			datatable.__nexlify_applying = true;
+			sawEmpty = false;
 			nexlify_reports.autofit_columns(datatable);
-			setTimeout(() => {
-				datatable.__nexlify_applying = false;
-			}, 200);
 		}, 250);
 	});
 
