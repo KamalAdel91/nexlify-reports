@@ -7,7 +7,7 @@ nexlify_reports.measure_text_width = function (text, font) {
 	return context.measureText(text || "").width;
 };
 
-nexlify_reports.get_report_key = function () {
+nexlify_reports.get_report_base_key = function () {
 	if (frappe.query_report && frappe.query_report.report_name) {
 		return "query_report:" + frappe.query_report.report_name;
 	}
@@ -15,6 +15,15 @@ nexlify_reports.get_report_key = function () {
 		return "list_report:" + cur_list.doctype;
 	}
 	return "unknown";
+};
+
+nexlify_reports.get_column_signature = function (datatable) {
+	const columns = datatable.datamanager.getColumns();
+	return columns.map((c) => c.id || c.name || "").join("|");
+};
+
+nexlify_reports.get_report_key = function (datatable) {
+	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable);
 };
 
 nexlify_reports.save_widths = function (key, widths) {
@@ -47,7 +56,7 @@ nexlify_reports.autofit_columns = function (datatable, opts) {
 
 	const columns = datatable.datamanager.getColumns();
 	const $wrapper = $(datatable.wrapper);
-	const key = nexlify_reports.get_report_key();
+	const key = nexlify_reports.get_report_key(datatable);
 
 	const sampleCell = $wrapper.find(".dt-cell__content").get(0);
 	let font = "12px sans-serif";
@@ -78,6 +87,8 @@ nexlify_reports.autofit_columns = function (datatable, opts) {
 		nexlify_reports.save_widths(key, widths);
 	}
 
+	datatable.__nexlify_last_signature = nexlify_reports.get_column_signature(datatable);
+
 	nexlify_reports.highlight_negative_numbers(datatable);
 };
 
@@ -92,7 +103,7 @@ nexlify_reports.reset_columns = function (datatable) {
 		$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", w + "px");
 	});
 
-	const key = nexlify_reports.get_report_key();
+	const key = nexlify_reports.get_report_key(datatable);
 	try {
 		localStorage.removeItem("nexlify_col_widths:" + key);
 	} catch (e) {}
@@ -130,6 +141,24 @@ nexlify_reports.setup_report = function () {
 	}
 };
 
+nexlify_reports.apply_saved_or_autofit = function (datatable) {
+	const key = nexlify_reports.get_report_key(datatable);
+	const saved = nexlify_reports.load_widths(key);
+
+	if (saved) {
+		const $wrapper = $(datatable.wrapper);
+		Object.keys(saved).forEach((colIndex) => {
+			const w = saved[colIndex];
+			datatable.columnmanager.setColumnWidth(Number(colIndex), w);
+			$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", w + "px");
+		});
+		datatable.__nexlify_last_signature = nexlify_reports.get_column_signature(datatable);
+		nexlify_reports.highlight_negative_numbers(datatable);
+	} else {
+		nexlify_reports.autofit_columns(datatable);
+	}
+};
+
 nexlify_reports.observe_datatable = function (datatable) {
 	if (!datatable || datatable.__nexlify_observed) return;
 	datatable.__nexlify_observed = true;
@@ -137,30 +166,12 @@ nexlify_reports.observe_datatable = function (datatable) {
 	nexlify_reports.capture_original_widths(datatable);
 
 	setTimeout(() => {
-		const key = nexlify_reports.get_report_key();
-		const saved = nexlify_reports.load_widths(key);
-
-		if (saved) {
-			const $wrapper = $(datatable.wrapper);
-			Object.keys(saved).forEach((colIndex) => {
-				const w = saved[colIndex];
-				datatable.columnmanager.setColumnWidth(Number(colIndex), w);
-				$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", w + "px");
-			});
-			nexlify_reports.highlight_negative_numbers(datatable);
-		} else {
-			nexlify_reports.autofit_columns(datatable);
-		}
+		nexlify_reports.apply_saved_or_autofit(datatable);
 	}, 150);
 
 	const bodyEl = $(datatable.wrapper).find(".dt-scrollable")[0];
 	if (!bodyEl) return;
 
-	// Detect a genuine data refresh (new filter, Refresh, Rebuild, reload)
-	// vs. virtual-scroll DOM churn: a real refresh clears the table down to
-	// (near) zero rows before repopulating; plain scrolling never empties
-	// it, it just slides the visible window. Only trigger autofit on that
-	// empty -> full transition, once per transition.
 	let debounceTimer = null;
 	let sawEmpty = false;
 
@@ -172,12 +183,16 @@ nexlify_reports.observe_datatable = function (datatable) {
 			return;
 		}
 
-		if (!sawEmpty) return;
+		const currentSignature = nexlify_reports.get_column_signature(datatable);
+		const columnsChanged = datatable.__nexlify_last_signature !== undefined
+			&& currentSignature !== datatable.__nexlify_last_signature;
+
+		if (!sawEmpty && !columnsChanged) return;
 
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			sawEmpty = false;
-			nexlify_reports.autofit_columns(datatable);
+			nexlify_reports.apply_saved_or_autofit(datatable);
 		}, 250);
 	});
 
