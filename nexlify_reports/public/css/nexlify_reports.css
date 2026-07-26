@@ -1,0 +1,63 @@
+/* Nexlify Reports - report view refinement */
+
+.report-wrapper {
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+/* Column header row - subtle tint, bold text, sticky on scroll */
+.dt-row-header {
+	position: sticky;
+	top: 0;
+	z-index: 3;
+}
+
+.dt-row-header .dt-cell {
+	background-color: #eaf6f1 !important;
+}
+
+.dt-row-header .dt-cell__content {
+	font-weight: 700 !important;
+}
+
+[data-theme="dark"] .dt-row-header .dt-cell {
+	background-color: #16302a !important;
+}
+
+/* Zebra striping - subtle */
+.dt-row:nth-child(even) .dt-cell {
+	background-color: #fafbfa;
+}
+
+[data-theme="dark"] .dt-row:nth-child(even) .dt-cell {
+	background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Hover - light highlight */
+.dt-row:hover .dt-cell {
+	background-color: #f0f7f4 !important;
+}
+
+[data-theme="dark"] .dt-row:hover .dt-cell {
+	background-color: rgba(15, 110, 86, 0.12) !important;
+}
+
+.dt-cell {
+	padding: 0 10px !important;
+}
+
+/* Negative numbers - subtle warning tint (added by JS) */
+.nexlify-negative {
+	color: #b03030 !important;
+}
+
+[data-theme="dark"] .nexlify-negative {
+	color: #e58080 !important;
+}
+
+
+[data-theme="dark"] .nexlify-group-header {
+	background-color: #16302a !important;
+	border-bottom-color: #234840;
+}
+
