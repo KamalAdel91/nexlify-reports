@@ -160,3 +160,17 @@
 	background-color: #16302a !important;
 	border-color: #2fa583 !important;
 }
+
+.nexlify-filter-list label {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+
+.nexlify-filter-list label span {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}

@@ -309,8 +309,9 @@ nexlify_reports.render_popup_list = function ($popup, allValues, checkedSet, sea
 	visibleValues.forEach((v) => {
 		const checked = checkedSet.has(v) ? "checked" : "";
 		const label = v === "" ? __("(blank)") : nexlify_reports.esc_html(v);
+		const titleAttr = v === "" ? "" : nexlify_reports.esc_html(v);
 		$list.append(
-			`<label><input type="checkbox" class="nexlify-value-cb" value="${nexlify_reports.esc_html(v)}" ${checked}> ${label}</label>`
+			`<label><input type="checkbox" class="nexlify-value-cb" value="${nexlify_reports.esc_html(v)}" ${checked}> <span title="${titleAttr}">${label}</span></label>`
 		);
 	});
 
