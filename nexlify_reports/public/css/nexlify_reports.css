@@ -174,3 +174,13 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+
+.nexlify-add-selection-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 2px 6px 2px;
+	font-size: 11px;
+	color: var(--text-muted, #888);
+	cursor: pointer;
+}

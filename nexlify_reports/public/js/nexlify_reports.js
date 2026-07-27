@@ -288,6 +288,20 @@ nexlify_reports.trigger_refilter = function (datatable) {
 	}
 };
 
+nexlify_reports.update_filter_summary = function (datatable, colIndex, inputEl) {
+	const filterSet = datatable.__nexlify_value_filters[colIndex];
+	if (!filterSet) {
+		inputEl.value = "";
+		return;
+	}
+	if (filterSet.size === 1) {
+		const only = Array.from(filterSet)[0];
+		inputEl.value = only === "" ? __("(blank)") : only;
+	} else {
+		inputEl.value = __("Multiple select") + " (" + filterSet.size + ")";
+	}
+};
+
 nexlify_reports.close_value_popup = function () {
 	$(".nexlify-filter-popup").remove();
 	$(document).off("click.nexlify-filter-close");
@@ -326,14 +340,20 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 
 	const allValues = nexlify_reports.get_unique_values(datatable, colIndex);
 	const existingFilter = datatable.__nexlify_value_filters[colIndex];
-	const checkedSet = existingFilter ? new Set(existingFilter) : new Set(allValues);
+	let checkedSet = existingFilter ? new Set(existingFilter) : new Set(allValues);
+	let preSearchSet = null;
+
+	inputEl.value = "";
 
 	const rect = inputEl.getBoundingClientRect();
 
 	const $popup = $(`
 		<div class="nexlify-filter-popup">
 			<label class="nexlify-select-all-row">
-				<input type="checkbox" class="nexlify-select-all" checked> <b>${__("Select All")}</b>
+				<input type="checkbox" class="nexlify-select-all" checked> <b class="nexlify-select-all-label">${__("Select All")}</b>
+			</label>
+			<label class="nexlify-add-selection-row" style="display:none;">
+				<input type="checkbox" class="nexlify-add-selection"> ${__("Add current selection to filter")}
 			</label>
 			<div class="nexlify-filter-list"></div>
 			<div class="nexlify-filter-actions">
@@ -344,9 +364,16 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 		</div>
 	`);
 
+	const popupWidth = 230;
+	let leftPos = rect.left + window.scrollX;
+	const maxLeft = window.scrollX + document.documentElement.clientWidth - popupWidth - 8;
+	if (leftPos > maxLeft) {
+		leftPos = Math.max(maxLeft, 8);
+	}
+
 	$popup.css({
 		top: rect.bottom + window.scrollY + 2 + "px",
-		left: rect.left + window.scrollX + "px",
+		left: leftPos + "px",
 	});
 
 	$("body").append($popup);
@@ -354,7 +381,29 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	let visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
 
 	$(inputEl).on("input.nexlifypopup", function () {
-		visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, this.value);
+		const searchText = this.value;
+
+		// Snapshot the selection as it was the moment a search begins, so it
+		// can be restored/merged later - never destroyed by typing itself.
+		if (searchText && preSearchSet === null) {
+			preSearchSet = new Set(checkedSet);
+		}
+		if (!searchText && preSearchSet !== null) {
+			checkedSet = new Set(preSearchSet);
+			preSearchSet = null;
+		}
+
+		const newVisible = allValues.filter(
+			(v) => !searchText || v.toLowerCase().includes(searchText.toLowerCase())
+		);
+
+		if (searchText) {
+			checkedSet = new Set(newVisible);
+		}
+
+		$popup.find(".nexlify-select-all-label").text(searchText ? __("Select All Search Results") : __("Select All"));
+		$popup.find(".nexlify-add-selection-row").toggle(!!searchText);
+		visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, searchText);
 	});
 
 	$popup.on("change", ".nexlify-value-cb", function () {
@@ -383,6 +432,8 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 
 	const finish = function () {
 		$(inputEl).off("input.nexlifypopup");
+		nexlify_reports.mark_filter_active(datatable, colIndex, inputEl);
+		nexlify_reports.update_filter_summary(datatable, colIndex, inputEl);
 		nexlify_reports.close_value_popup();
 	};
 
@@ -391,12 +442,17 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	});
 
 	$popup.find(".nexlify-filter-ok").on("click", function () {
-		if (checkedSet.size === 0 || checkedSet.size === allValues.length) {
+		const addMode = $popup.find(".nexlify-add-selection").is(":checked");
+		let finalSet = checkedSet;
+		if (preSearchSet !== null && addMode) {
+			finalSet = new Set([...preSearchSet, ...checkedSet]);
+		}
+
+		if (finalSet.size === 0 || finalSet.size === allValues.length) {
 			delete datatable.__nexlify_value_filters[colIndex];
 		} else {
-			datatable.__nexlify_value_filters[colIndex] = new Set(checkedSet);
+			datatable.__nexlify_value_filters[colIndex] = new Set(finalSet);
 		}
-		nexlify_reports.mark_filter_active(datatable, colIndex, inputEl);
 		nexlify_reports.trigger_refilter(datatable);
 		finish();
 	});
@@ -404,6 +460,20 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	$popup.on("click", function (e) {
 		e.stopPropagation();
 	});
+
+	const scrollEl = $(datatable.wrapper).find(".dt-scrollable")[0];
+	const closeOnScroll = function (e) {
+		// Ignore scrolling that happens inside the popup itself (e.g. the
+		// value list's own internal scrollbar) - only close on scrolling
+		// of the underlying table/page, which would move the field away
+		// from the popup's fixed position.
+		if (e && e.target && $popup.get(0).contains(e.target)) return;
+		finish();
+	};
+	if (scrollEl) {
+		scrollEl.addEventListener("scroll", closeOnScroll, { once: true });
+	}
+	window.addEventListener("scroll", closeOnScroll, { once: true });
 
 	setTimeout(() => {
 		$(document).on("click.nexlify-filter-close", function (e) {
@@ -430,6 +500,7 @@ nexlify_reports.bind_search_boxes = function (datatable) {
 		});
 
 		nexlify_reports.mark_filter_active(datatable, colIndex, this);
+		nexlify_reports.update_filter_summary(datatable, colIndex, this);
 	});
 };
 
