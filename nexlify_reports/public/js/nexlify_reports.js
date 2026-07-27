@@ -50,13 +50,18 @@ nexlify_reports.highlight_negative_numbers = function (datatable) {
 	});
 };
 
-nexlify_reports.autofit_columns = function (datatable, opts) {
-	opts = opts || {};
-	if (!datatable || !datatable.datamanager) return;
+nexlify_reports.apply_widths = function (datatable, widths) {
+	const $wrapper = $(datatable.wrapper);
+	Object.keys(widths).forEach((colIndex) => {
+		const w = widths[colIndex];
+		datatable.columnmanager.setColumnWidth(Number(colIndex), w);
+		$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", w + "px");
+	});
+};
 
+nexlify_reports.compute_content_widths = function (datatable) {
 	const columns = datatable.datamanager.getColumns();
 	const $wrapper = $(datatable.wrapper);
-	const key = nexlify_reports.get_report_key(datatable);
 
 	const sampleCell = $wrapper.find(".dt-cell__content").get(0);
 	let font = "12px sans-serif";
@@ -76,32 +81,60 @@ nexlify_reports.autofit_columns = function (datatable, opts) {
 			if (w > maxWidth) maxWidth = w;
 		});
 
-		const finalWidth = maxWidth + 32;
-		widths[colIndex] = finalWidth;
-
-		datatable.columnmanager.setColumnWidth(colIndex, finalWidth);
-		$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", finalWidth + "px");
+		widths[colIndex] = maxWidth + 32;
 	});
 
-	if (!opts.skipSave) {
-		nexlify_reports.save_widths(key, widths);
-	}
+	return widths;
+};
+
+nexlify_reports.stretch_to_fill = function (datatable, widths, key, opts) {
+	requestAnimationFrame(() => {
+		requestAnimationFrame(() => {
+			const $wrapper = $(datatable.wrapper);
+			const scrollEl = $wrapper.find(".dt-scrollable")[0];
+			const headerRowEl = $wrapper.find(".dt-row-header")[0];
+
+			if (!scrollEl || !headerRowEl) {
+				if (!opts.skipSave) nexlify_reports.save_widths(key, widths);
+				return;
+			}
+
+			const containerWidth = scrollEl.getBoundingClientRect().width;
+			const renderedWidth = headerRowEl.getBoundingClientRect().width;
+
+			if (renderedWidth > 0 && containerWidth - renderedWidth > 4) {
+				const ratio = containerWidth / renderedWidth;
+				const scaledWidths = {};
+				Object.keys(widths).forEach((colIndex) => {
+					scaledWidths[colIndex] = Math.floor(widths[colIndex] * ratio);
+				});
+				nexlify_reports.apply_widths(datatable, scaledWidths);
+				if (!opts.skipSave) nexlify_reports.save_widths(key, scaledWidths);
+			} else {
+				if (!opts.skipSave) nexlify_reports.save_widths(key, widths);
+			}
+		});
+	});
+};
+
+nexlify_reports.autofit_columns = function (datatable, opts) {
+	opts = opts || {};
+	if (!datatable || !datatable.datamanager) return;
+
+	const key = nexlify_reports.get_report_key(datatable);
+	const widths = nexlify_reports.compute_content_widths(datatable);
+
+	nexlify_reports.apply_widths(datatable, widths);
 
 	datatable.__nexlify_last_signature = nexlify_reports.get_column_signature(datatable);
-
 	nexlify_reports.highlight_negative_numbers(datatable);
+
+	nexlify_reports.stretch_to_fill(datatable, widths, key, opts);
 };
 
 nexlify_reports.reset_columns = function (datatable) {
 	if (!datatable || !datatable.__nexlify_original_widths) return;
-	const $wrapper = $(datatable.wrapper);
-	const original = datatable.__nexlify_original_widths;
-
-	Object.keys(original).forEach((colIndex) => {
-		const w = original[colIndex];
-		datatable.columnmanager.setColumnWidth(Number(colIndex), w);
-		$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", w + "px");
-	});
+	nexlify_reports.apply_widths(datatable, datatable.__nexlify_original_widths);
 
 	const key = nexlify_reports.get_report_key(datatable);
 	try {
@@ -119,25 +152,33 @@ nexlify_reports.capture_original_widths = function (datatable) {
 	datatable.__nexlify_original_widths = original;
 };
 
-nexlify_reports.setup_report = function () {
-	if (frappe.query_report && frappe.query_report.page && !frappe.query_report.__nexlify_autofit_added) {
-		frappe.query_report.page.add_inner_button(__("Autofit"), () => {
-			nexlify_reports.autofit_columns(frappe.query_report.datatable);
-		});
-		frappe.query_report.page.add_inner_button(__("Reset columns"), () => {
-			nexlify_reports.reset_columns(frappe.query_report.datatable);
-		});
-		frappe.query_report.__nexlify_autofit_added = true;
+nexlify_reports.ensure_buttons = function (pageObj, datatableGetter) {
+	if (!pageObj || !pageObj.page) return;
+	const $toolbar = pageObj.page.inner_toolbar;
+	if ($toolbar && $toolbar.find(".nexlify-autofit-btn").length) {
+		return;
 	}
 
-	if (cur_list && cur_list.datatable && cur_list.page && !cur_list.__nexlify_autofit_added) {
-		cur_list.page.add_inner_button(__("Autofit"), () => {
-			nexlify_reports.autofit_columns(cur_list.datatable);
-		});
-		cur_list.page.add_inner_button(__("Reset columns"), () => {
-			nexlify_reports.reset_columns(cur_list.datatable);
-		});
-		cur_list.__nexlify_autofit_added = true;
+	pageObj.page
+		.add_inner_button(__("Autofit"), () => {
+			nexlify_reports.autofit_columns(datatableGetter());
+		})
+		.addClass("nexlify-autofit-btn");
+
+	pageObj.page
+		.add_inner_button(__("Reset columns"), () => {
+			nexlify_reports.reset_columns(datatableGetter());
+		})
+		.addClass("nexlify-reset-btn");
+};
+
+nexlify_reports.setup_report = function () {
+	if (frappe.query_report && frappe.query_report.page) {
+		nexlify_reports.ensure_buttons(frappe.query_report, () => frappe.query_report.datatable);
+	}
+
+	if (cur_list && cur_list.datatable && cur_list.page) {
+		nexlify_reports.ensure_buttons(cur_list, () => cur_list.datatable);
 	}
 };
 
@@ -146,12 +187,7 @@ nexlify_reports.apply_saved_or_autofit = function (datatable) {
 	const saved = nexlify_reports.load_widths(key);
 
 	if (saved) {
-		const $wrapper = $(datatable.wrapper);
-		Object.keys(saved).forEach((colIndex) => {
-			const w = saved[colIndex];
-			datatable.columnmanager.setColumnWidth(Number(colIndex), w);
-			$wrapper.find(`.dt-cell__content--header-${colIndex}`).css("width", w + "px");
-		});
+		nexlify_reports.apply_widths(datatable, saved);
 		datatable.__nexlify_last_signature = nexlify_reports.get_column_signature(datatable);
 		nexlify_reports.highlight_negative_numbers(datatable);
 	} else {
@@ -207,6 +243,7 @@ nexlify_reports.watch_and_bind = function () {
 		if (cur_list && cur_list.datatable) {
 			nexlify_reports.observe_datatable(cur_list.datatable);
 		}
+		nexlify_reports.setup_report();
 	}, 800);
 };
 

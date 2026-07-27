@@ -42,8 +42,17 @@
 	background-color: rgba(15, 110, 86, 0.12) !important;
 }
 
+/* Padding must live on the inner content box, not .dt-cell itself - and it
+   must be included inside the width we compute in JS (box-sizing), not
+   added on top of it. Otherwise columns overflow the container by
+   (num_columns * horizontal_padding), causing a blank gap / scrollbar. */
 .dt-cell {
+	padding: 0 !important;
+}
+
+.dt-cell__content {
 	padding: 0 10px !important;
+	box-sizing: border-box !important;
 }
 
 /* Negative numbers - subtle warning tint (added by JS) */
@@ -55,9 +64,10 @@
 	color: #e58080 !important;
 }
 
-
-[data-theme="dark"] .nexlify-group-header {
-	background-color: #16302a !important;
-	border-bottom-color: #234840;
+/* frappe-datatable sets a fixed inline width on .dt-scrollable once at init
+   time and never updates it on layout changes (sidebar, viewport, etc.),
+   which is the real cause of the leftover blank gap - nothing to do with
+   column widths. Force it to always fill its parent instead. */
+.dt-scrollable {
+	width: 100% !important;
 }
-
