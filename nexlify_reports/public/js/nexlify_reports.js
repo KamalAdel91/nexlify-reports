@@ -235,13 +235,212 @@ nexlify_reports.observe_datatable = function (datatable) {
 	observer.observe(bodyEl, { childList: true, subtree: true });
 };
 
+nexlify_reports.esc_html = function (text) {
+	return $("<div>").text(text).html();
+};
+
+nexlify_reports.get_unique_values = function (datatable, colIndex) {
+	const rows = datatable.datamanager.rows;
+	const values = new Set();
+	rows.forEach((row) => {
+		const cell = row[colIndex];
+		if (cell) {
+			const text = cell.content !== undefined && cell.content !== null ? String(cell.content).trim() : "";
+			values.add(text);
+		}
+	});
+	return Array.from(values).sort((a, b) => a.localeCompare(b));
+};
+
+nexlify_reports.apply_combined_filter = function (datatable, rows, textFilters, dm) {
+	const valueFilters = datatable.__nexlify_value_filters || {};
+	const allIndices = rows.map((r, i) => i);
+
+	if (Object.keys(valueFilters).length === 0) {
+		return Promise.resolve(allIndices);
+	}
+
+	return Promise.resolve(
+		allIndices.filter((rowIndex) => {
+			return Object.keys(valueFilters).every((colIndex) => {
+				const allowedSet = valueFilters[colIndex];
+				const cell = rows[rowIndex][colIndex];
+				const text = cell && cell.content !== undefined && cell.content !== null ? String(cell.content).trim() : "";
+				return allowedSet.has(text);
+			});
+		})
+	);
+};
+
+nexlify_reports.ensure_filter_override = function (datatable) {
+	if (!datatable || datatable.__nexlify_filter_override_added) return;
+	datatable.__nexlify_filter_override_added = true;
+	datatable.__nexlify_value_filters = {};
+
+	datatable.datamanager.options.filterRows = function (rows, filters, dm) {
+		return nexlify_reports.apply_combined_filter(datatable, rows, filters, dm);
+	};
+};
+
+nexlify_reports.trigger_refilter = function (datatable) {
+	if (datatable.columnmanager && datatable.columnmanager.applyFilter) {
+		datatable.columnmanager.applyFilter(datatable.columnmanager.getAppliedFilters());
+	}
+};
+
+nexlify_reports.close_value_popup = function () {
+	$(".nexlify-filter-popup").remove();
+	$(document).off("click.nexlify-filter-close");
+};
+
+nexlify_reports.mark_filter_active = function (datatable, colIndex, inputEl) {
+	const isActive = !!datatable.__nexlify_value_filters[colIndex];
+	$(inputEl).toggleClass("nexlify-filter-active", isActive);
+};
+
+nexlify_reports.render_popup_list = function ($popup, allValues, checkedSet, searchText) {
+	const $list = $popup.find(".nexlify-filter-list");
+	$list.empty();
+
+	const visibleValues = allValues.filter(
+		(v) => !searchText || v.toLowerCase().includes(searchText.toLowerCase())
+	);
+
+	visibleValues.forEach((v) => {
+		const checked = checkedSet.has(v) ? "checked" : "";
+		const label = v === "" ? __("(blank)") : nexlify_reports.esc_html(v);
+		$list.append(
+			`<label><input type="checkbox" class="nexlify-value-cb" value="${nexlify_reports.esc_html(v)}" ${checked}> ${label}</label>`
+		);
+	});
+
+	const allVisibleChecked = visibleValues.length > 0 && visibleValues.every((v) => checkedSet.has(v));
+	$popup.find(".nexlify-select-all").prop("checked", allVisibleChecked);
+
+	return visibleValues;
+};
+
+nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
+	nexlify_reports.close_value_popup();
+
+	const allValues = nexlify_reports.get_unique_values(datatable, colIndex);
+	const existingFilter = datatable.__nexlify_value_filters[colIndex];
+	const checkedSet = existingFilter ? new Set(existingFilter) : new Set(allValues);
+
+	const rect = inputEl.getBoundingClientRect();
+
+	const $popup = $(`
+		<div class="nexlify-filter-popup">
+			<label class="nexlify-select-all-row">
+				<input type="checkbox" class="nexlify-select-all" checked> <b>${__("Select All")}</b>
+			</label>
+			<div class="nexlify-filter-list"></div>
+			<div class="nexlify-filter-actions">
+				<button type="button" class="btn btn-default btn-xs nexlify-filter-clear">${__("Clear")}</button>
+				<button type="button" class="btn btn-default btn-xs nexlify-filter-cancel">${__("Cancel")}</button>
+				<button type="button" class="btn btn-primary btn-xs nexlify-filter-ok">${__("OK")}</button>
+			</div>
+		</div>
+	`);
+
+	$popup.css({
+		top: rect.bottom + window.scrollY + 2 + "px",
+		left: rect.left + window.scrollX + "px",
+	});
+
+	$("body").append($popup);
+
+	let visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
+
+	$(inputEl).on("input.nexlifypopup", function () {
+		visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, this.value);
+	});
+
+	$popup.on("change", ".nexlify-value-cb", function () {
+		if (this.checked) {
+			checkedSet.add(this.value);
+		} else {
+			checkedSet.delete(this.value);
+		}
+		const allVisibleChecked = visibleValues.length > 0 && visibleValues.every((v) => checkedSet.has(v));
+		$popup.find(".nexlify-select-all").prop("checked", allVisibleChecked);
+	});
+
+	$popup.on("change", ".nexlify-select-all", function () {
+		if (this.checked) {
+			visibleValues.forEach((v) => checkedSet.add(v));
+		} else {
+			visibleValues.forEach((v) => checkedSet.delete(v));
+		}
+		nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
+	});
+
+	$popup.find(".nexlify-filter-clear").on("click", function () {
+		checkedSet.clear();
+		visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
+	});
+
+	const finish = function () {
+		$(inputEl).off("input.nexlifypopup");
+		nexlify_reports.close_value_popup();
+	};
+
+	$popup.find(".nexlify-filter-cancel").on("click", function () {
+		finish();
+	});
+
+	$popup.find(".nexlify-filter-ok").on("click", function () {
+		if (checkedSet.size === 0 || checkedSet.size === allValues.length) {
+			delete datatable.__nexlify_value_filters[colIndex];
+		} else {
+			datatable.__nexlify_value_filters[colIndex] = new Set(checkedSet);
+		}
+		nexlify_reports.mark_filter_active(datatable, colIndex, inputEl);
+		nexlify_reports.trigger_refilter(datatable);
+		finish();
+	});
+
+	$popup.on("click", function (e) {
+		e.stopPropagation();
+	});
+
+	setTimeout(() => {
+		$(document).on("click.nexlify-filter-close", function (e) {
+			if (!$(e.target).closest(".nexlify-filter-popup").length && e.target !== inputEl) {
+				finish();
+			}
+		});
+	}, 0);
+};
+
+nexlify_reports.bind_search_boxes = function (datatable) {
+	nexlify_reports.ensure_filter_override(datatable);
+
+	const $wrapper = $(datatable.wrapper);
+
+	$wrapper.find(".dt-filter").each(function () {
+		if ($(this).data("nexlify-bound")) return;
+		$(this).data("nexlify-bound", true);
+
+		const colIndex = this.dataset.colIndex;
+
+		$(this).on("focus", function () {
+			nexlify_reports.open_value_popup(datatable, colIndex, this);
+		});
+
+		nexlify_reports.mark_filter_active(datatable, colIndex, this);
+	});
+};
+
 nexlify_reports.watch_and_bind = function () {
 	setInterval(() => {
 		if (frappe.query_report && frappe.query_report.datatable) {
 			nexlify_reports.observe_datatable(frappe.query_report.datatable);
+			nexlify_reports.bind_search_boxes(frappe.query_report.datatable);
 		}
 		if (cur_list && cur_list.datatable) {
 			nexlify_reports.observe_datatable(cur_list.datatable);
+			nexlify_reports.bind_search_boxes(cur_list.datatable);
 		}
 		nexlify_reports.setup_report();
 	}, 800);

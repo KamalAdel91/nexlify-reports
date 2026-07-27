@@ -71,3 +71,92 @@
 .dt-scrollable {
 	width: 100% !important;
 }
+
+/* Excel-style column filter dropdown */
+.nexlify-filter-btn {
+	cursor: pointer;
+	margin-left: 6px;
+	opacity: 0.5;
+	display: inline-flex;
+	vertical-align: middle;
+}
+
+.nexlify-filter-btn.nexlify-filter-active {
+	opacity: 1;
+	color: #0f6e56;
+}
+
+.nexlify-filter-popup {
+	position: fixed;
+	background: var(--fg-color, #ffffff);
+	border: 1px solid var(--border-color, #d1d8dd);
+	border-radius: var(--border-radius-md, 6px);
+	box-shadow: var(--shadow-lg, 0 4px 14px rgba(0, 0, 0, 0.18));
+	z-index: 10000;
+	width: 230px;
+	padding: 8px;
+	font-size: 12px;
+	color: var(--text-color, inherit);
+}
+
+.nexlify-filter-popup input[type="text"] {
+	width: 100%;
+	box-sizing: border-box;
+	margin-bottom: 6px;
+	padding: 4px 6px;
+	font-size: 12px;
+}
+
+.nexlify-filter-list {
+	max-height: 160px;
+	overflow-y: auto;
+	margin-bottom: 6px;
+	border-top: 1px solid #eee;
+	border-bottom: 1px solid #eee;
+	padding: 4px 0;
+}
+
+.nexlify-filter-list label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 0;
+	cursor: pointer;
+	font-weight: 400;
+}
+
+.nexlify-filter-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--border-color, #eee);
+}
+
+.nexlify-filter-actions .nexlify-filter-clear {
+	margin-right: auto;
+}
+
+.nexlify-select-all-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 2px 8px 2px;
+	border-bottom: 1px solid #eee;
+	margin-bottom: 4px;
+	cursor: pointer;
+}
+
+[data-theme="dark"] .nexlify-select-all-row {
+	border-bottom-color: #333;
+}
+
+.dt-filter.nexlify-filter-active {
+	background-color: #eaf6f1 !important;
+	border-color: #0f6e56 !important;
+}
+
+[data-theme="dark"] .dt-filter.nexlify-filter-active {
+	background-color: #16302a !important;
+	border-color: #2fa583 !important;
+}
