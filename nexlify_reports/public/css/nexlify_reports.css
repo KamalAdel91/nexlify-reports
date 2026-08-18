@@ -205,3 +205,36 @@
     height: 22px !important;
     box-sizing: border-box !important;
 }
+
+/* ---- Reports sometimes hardcode an inline text color (e.g. green for
+   positive quantities) regardless of theme. That's fine in light mode
+   but reads as near-invisible against a dark background. Brighten any
+   inline-colored text inside cells in dark mode only, without touching
+   its actual hue - still green stays green, red stays red. ---- */
+[data-theme="dark"] .dt-cell__content span[style*="color"] {
+    filter: brightness(1.8) saturate(1.15);
+}
+
+[data-theme="dark"] .dt-row-totalRow .dt-cell {
+    background-color: #1f2937 !important;
+}
+
+[data-theme="dark"] .dt-row-totalRow .dt-cell__content {
+    color: #f3f4f6 !important;
+    font-weight: 700 !important;
+}
+
+[data-theme="dark"] .dt-row-totalRow .dt-cell__content div {
+    color: #f3f4f6 !important;
+}
+
+
+/* ---- frappe-datatable sets a fixed INLINE width on .dt-scrollable at
+   init time (e.g. style="width: 1231px") and never updates it
+   afterward - this rule was here originally and got lost along the
+   way. !important is required to override an inline style, and this
+   targets .dt-scrollable specifically (NOT .datatable, which crashed
+   the library's own internal rendering when we tried that earlier). ---- */
+.dt-scrollable {
+	width: 100% !important;
+}
