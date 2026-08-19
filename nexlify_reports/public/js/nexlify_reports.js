@@ -27,7 +27,6 @@ nexlify_reports.get_or_create_style_tag = function (instanceClass) {
 	return styleEl;
 };
 
-// Single place that ever writes column-width CSS.
 nexlify_reports.write_width_rules = function (wrapperEl, widths) {
 	const instanceClass = nexlify_reports.get_instance_class(wrapperEl);
 	if (!instanceClass) return;
@@ -56,8 +55,10 @@ nexlify_reports.remove_width_rule_for_column = function (wrapperEl, colIndex) {
 		.join("\n");
 };
 
-// Measures the widest rendered content per column.
-// Samples font from both header and body for better accuracy.
+// ============================================================
+// Content width calculation (smarter minimums for headers)
+// ============================================================
+
 nexlify_reports.compute_content_widths = function (wrapperEl) {
 	const $wrapper = $(wrapperEl);
 	const colIndices = new Set();
@@ -66,7 +67,6 @@ nexlify_reports.compute_content_widths = function (wrapperEl) {
 	});
 	if (!colIndices.size) return null;
 
-	// Prefer body cell, fallback to header
 	let sampleContent = $wrapper.find(".dt-row:not(.dt-row-header) .dt-cell__content").get(0)
 		|| $wrapper.find(".dt-cell__content").get(0);
 
@@ -76,7 +76,6 @@ nexlify_reports.compute_content_widths = function (wrapperEl) {
 		font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
 	}
 
-	// Also measure header font (often bolder)
 	const headerSample = $wrapper.find(".dt-row-header .dt-cell__content").get(0);
 	let headerFont = font;
 	if (headerSample) {
@@ -86,24 +85,24 @@ nexlify_reports.compute_content_widths = function (wrapperEl) {
 
 	const widths = {};
 	colIndices.forEach((colIndex) => {
-		let maxWidth = 40;
+		let maxWidth = 60; // minimum comfortable width
 
-		// Header
+		// Header text (critical for readability)
 		$wrapper.find(`.dt-row-header [data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
 			const text = this.getAttribute("title") || this.textContent || "";
 			const w = nexlify_reports.measure_text_width(text.trim(), headerFont);
 			if (w > maxWidth) maxWidth = w;
 		});
 
-		// Body
+		// Body content
 		$wrapper.find(`.dt-row:not(.dt-row-header) [data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
 			const text = this.getAttribute("title") || this.textContent || "";
 			const w = nexlify_reports.measure_text_width(text.trim(), font);
 			if (w > maxWidth) maxWidth = w;
 		});
 
-		// +32 for padding + sort icon + filter icon space
-		widths[colIndex] = maxWidth + 32;
+		// padding + sort/filter icons
+		widths[colIndex] = Math.ceil(maxWidth + 36);
 	});
 	return widths;
 };
@@ -131,8 +130,7 @@ nexlify_reports.get_column_signature = function (datatable) {
 };
 
 nexlify_reports.get_report_key = function (datatable) {
-	// :v8 → cache invalidation after measurement + stretch fixes
-	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable) + ":v8";
+	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable) + ":v9";
 };
 
 nexlify_reports.save_widths = function (key, widths) {
@@ -151,17 +149,12 @@ nexlify_reports.load_widths = function (key) {
 };
 
 // ============================================================
-// Cell formatting: negative numbers in red, zero amounts as "-"
+// Cell formatting
 // ============================================================
-
-nexlify_reports.ZERO_CURRENCY_RE = /^([A-Za-z]{2,5}\s*)?[0]+([.,]0+)?\s*([A-Za-z]{2,5})?$/;
 
 nexlify_reports.is_zero_value = function (text) {
 	const t = (text || "").trim();
 	if (!t || t === "-") return true;
-	// pure zero variants
-	if (nexlify_reports.ZERO_CURRENCY_RE.test(t)) return true;
-	// numeric check after stripping currency letters and spaces
 	const cleaned = t.replace(/[A-Za-z\s]/g, "").replace(/,/g, "");
 	const num = parseFloat(cleaned);
 	return !isNaN(num) && num === 0;
@@ -170,11 +163,8 @@ nexlify_reports.is_zero_value = function (text) {
 nexlify_reports.is_negative_value = function (text) {
 	const t = (text || "").trim();
 	if (!t) return false;
-
-	// Accounting style: (123.45)
+	// accounting format (123.45)
 	if (/^\([\d.,\s]+\)$/.test(t.replace(/[A-Za-z]/g, ""))) return true;
-
-	// Normal negative: -123.45 or - EGP 123 etc.
 	const cleaned = t.replace(/[A-Za-z\s]/g, "").replace(/,/g, "");
 	if (cleaned.startsWith("-")) {
 		const num = parseFloat(cleaned);
@@ -201,78 +191,45 @@ nexlify_reports.highlight_negative_numbers_dom = function (wrapperEl) {
 		.find(".dt-row[data-row-index] .dt-cell__content")
 		.each(function () {
 			const text = (this.textContent || "").trim();
-			const isNegative = nexlify_reports.is_negative_value(text);
-			$(this).toggleClass("nexlify-negative", isNegative);
+			$(this).toggleClass("nexlify-negative", nexlify_reports.is_negative_value(text));
 		});
 	nexlify_reports.apply_zero_dash(wrapperEl);
 };
 
 // ============================================================
-// Stretch logic – fixed overflow with few columns
+// Smart stretch – never force expand
 // ============================================================
 
 nexlify_reports.stretch_widths_to_fill = function (wrapperEl, widths) {
-	const total = Object.values(widths).reduce((a, b) => a + b, 0);
-	if (!(total > 0)) return widths;
+	// مفيش تمدد إجباري + مفيش تصغير إجباري
+	// الجداول العريضة تفضل عريضة ويظهر فيها scrollbar أفقي
+	return widths;
+};
 
-	// أدق قياس متاح
-	const scrollable = wrapperEl.querySelector(".dt-scrollable");
-	let containerWidth = 0;
+// ============================================================
+// Detect big resolution / window change → invalidate cache
+// ============================================================
 
-	if (scrollable) {
-		containerWidth = scrollable.clientWidth;
-	}
-	if (!(containerWidth > 0)) {
-		const measureEl = wrapperEl.parentElement || wrapperEl;
-		containerWidth = measureEl.clientWidth || Math.floor(measureEl.getBoundingClientRect().width);
-	}
-	if (!(containerWidth > 0)) return widths;
+nexlify_reports.check_and_invalidate_on_resize = function (wrapperEl) {
+	const scrollable = wrapperEl.querySelector(".dt-scrollable") || wrapperEl;
+	const currentWidth = scrollable.clientWidth || scrollable.getBoundingClientRect().width;
+	if (!(currentWidth > 0)) return;
 
-	const SAFETY_MARGIN = 2;
-	const available = Math.max(0, containerWidth - SAFETY_MARGIN);
+	const lastWidth = wrapperEl.__nexlify_last_container_width;
 
-	const scale = available / total;
-
-	// لو المحتوى أضيق من الحاوية → متعملش stretch، سيب الأعمدة على حجمها الطبيعي
-	if (scale >= 1) {
-		return widths;
-	}
-
-	// لو الفرق كبير أوي (جدول عريض جدًا) → متسحقوش، سيب الـ horizontal scroll
-	if (scale < 0.7) {
-		return widths;
-	}
-
-	// هنا بس: الحاوية أضيق شوية → صغّر الأعمدة بشكل متناسب
-	const MIN_COL_WIDTH = 40;
-	const keys = Object.keys(widths);
-	const scaled = {};
-	let scaledTotal = 0;
-
-	keys.forEach((colIndex) => {
-		const w = Math.max(MIN_COL_WIDTH, Math.floor(widths[colIndex] * scale));
-		scaled[colIndex] = w;
-		scaledTotal += w;
-	});
-
-	// وزّع الـ remainder (يزيد أو ينقص) عشان المجموع يبقى قريب من available
-	let remainder = Math.round(available - scaledTotal);
-
-	if (remainder > 0) {
-		for (let i = 0; i < keys.length && remainder > 0; i++, remainder--) {
-			scaled[keys[i]] += 1;
+	if (lastWidth && Math.abs(currentWidth - lastWidth) / lastWidth > 0.18) {
+		// Significant change (>18%) → clear saved widths and re-fit
+		if (wrapperEl.__nexlify_persist_key) {
+			try {
+				localStorage.removeItem("nexlify_col_widths:" + wrapperEl.__nexlify_persist_key);
+			} catch (e) {}
 		}
-	} else if (remainder < 0) {
-		const sorted = keys.slice().sort((a, b) => scaled[b] - scaled[a]);
-		for (let i = 0; i < sorted.length && remainder < 0; i++) {
-			if (scaled[sorted[i]] > MIN_COL_WIDTH) {
-				scaled[sorted[i]] -= 1;
-				remainder += 1;
-			}
-		}
+		nexlify_reports.fit_columns(wrapperEl, {
+			persistKey: wrapperEl.__nexlify_persist_key || null
+		});
 	}
 
-	return scaled;
+	wrapperEl.__nexlify_last_container_width = currentWidth;
 };
 
 // ============================================================
@@ -290,6 +247,7 @@ nexlify_reports.watch_container_resize = function (wrapperEl) {
 	setTimeout(() => {
 		let resizeTimer = null;
 		let lastWidth = measureEl.clientWidth || measureEl.getBoundingClientRect().width;
+		wrapperEl.__nexlify_last_container_width = lastWidth;
 
 		const ro = new ResizeObserver((entries) => {
 			if (nexlifyResizing) return;
@@ -300,18 +258,17 @@ nexlify_reports.watch_container_resize = function (wrapperEl) {
 
 			clearTimeout(resizeTimer);
 			resizeTimer = setTimeout(() => {
+				nexlify_reports.check_and_invalidate_on_resize(wrapperEl);
 				nexlify_reports.sync_widths_from_header(wrapperEl);
-			}, 150);
+			}, 180);
 		});
 		ro.observe(measureEl);
-
-		// keep reference for possible future disconnect
 		wrapperEl.__nexlify_ro = ro;
 	}, 600);
 };
 
 // ============================================================
-// Core fit / apply entry points
+// Core fit / apply
 // ============================================================
 
 nexlify_reports.fit_columns = function (wrapperEl, opts) {
@@ -356,11 +313,13 @@ nexlify_reports.apply_saved_or_autofit = function (datatable, wrapperEl) {
 };
 
 nexlify_reports.autofit_columns_dom = function (wrapperEl) {
-	nexlify_reports.fit_columns(wrapperEl, { persistKey: wrapperEl.__nexlify_persist_key || null });
+	nexlify_reports.fit_columns(wrapperEl, {
+		persistKey: wrapperEl.__nexlify_persist_key || null
+	});
 };
 
 // ============================================================
-// Floating toolbar (dialogs / custom pages)
+// Floating toolbar
 // ============================================================
 
 nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
@@ -375,7 +334,9 @@ nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
 	);
 
 	$bar.find(".nexlify-floating-autofit").on("click", function () {
-		nexlify_reports.fit_columns(wrapperEl, { persistKey: wrapperEl.__nexlify_persist_key || null });
+		nexlify_reports.fit_columns(wrapperEl, {
+			persistKey: wrapperEl.__nexlify_persist_key || null
+		});
 	});
 
 	$bar.find(".nexlify-floating-reset").on("click", function () {
@@ -385,16 +346,20 @@ nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
 			if (s) s.remove();
 		}
 		if (wrapperEl.__nexlify_persist_key) {
-			try { localStorage.removeItem("nexlify_col_widths:" + wrapperEl.__nexlify_persist_key); } catch (e) {}
+			try {
+				localStorage.removeItem("nexlify_col_widths:" + wrapperEl.__nexlify_persist_key);
+			} catch (e) {}
 		}
-		nexlify_reports.fit_columns(wrapperEl, { persistKey: wrapperEl.__nexlify_persist_key || null });
+		nexlify_reports.fit_columns(wrapperEl, {
+			persistKey: wrapperEl.__nexlify_persist_key || null
+		});
 	});
 
 	$(wrapperEl).before($bar);
 };
 
 // ============================================================
-// Page-level buttons (Report View / List View)
+// Page-level buttons
 // ============================================================
 
 nexlify_reports.ensure_buttons = function (pageObj, datatableGetter) {
@@ -411,8 +376,6 @@ nexlify_reports.ensure_buttons = function (pageObj, datatableGetter) {
 					const key = nexlify_reports.get_report_key(dt);
 					nexlify_reports.fit_columns(wrapperEl, { persistKey: key });
 					frappe.show_alert({ message: __("Columns autofitted"), indicator: "green" });
-				} else {
-					console.warn("[Nexlify] Autofit: no datatable found");
 				}
 			} catch (e) {
 				console.error("[Nexlify] Autofit error:", e);
@@ -425,11 +388,11 @@ nexlify_reports.ensure_buttons = function (pageObj, datatableGetter) {
 				if (dt && dt.wrapper) {
 					const wrapperEl = $(dt.wrapper).find(".datatable")[0];
 					const key = nexlify_reports.get_report_key(dt);
-					try { localStorage.removeItem("nexlify_col_widths:" + key); } catch (e) {}
+					try {
+						localStorage.removeItem("nexlify_col_widths:" + key);
+					} catch (e) {}
 					nexlify_reports.fit_columns(wrapperEl, { persistKey: key });
 					frappe.show_alert({ message: __("Columns reset to default"), indicator: "green" });
-				} else {
-					console.warn("[Nexlify] Reset: no datatable found");
 				}
 			} catch (e) {
 				console.error("[Nexlify] Reset error:", e);
@@ -450,7 +413,7 @@ nexlify_reports.setup_report = function () {
 };
 
 // ============================================================
-// Observe a single datatable instance
+// Observe datatable
 // ============================================================
 
 nexlify_reports.observe_datatable = function (datatable) {
@@ -497,8 +460,9 @@ nexlify_reports.observe_datatable = function (datatable) {
 			nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
 
 			const currentSignature = nexlify_reports.get_column_signature(datatable);
-			const columnsChanged = datatable.__nexlify_last_signature !== undefined
-				&& currentSignature !== datatable.__nexlify_last_signature;
+			const columnsChanged =
+				datatable.__nexlify_last_signature !== undefined &&
+				currentSignature !== datatable.__nexlify_last_signature;
 
 			if (!sawEmpty && !columnsChanged) return;
 
@@ -515,11 +479,10 @@ nexlify_reports.observe_datatable = function (datatable) {
 };
 
 // ============================================================
-// Polling + page-change cleanup
+// Polling + cleanup
 // ============================================================
 
 nexlify_reports.watch_and_bind = function () {
-	// Slightly slower interval – less CPU while still catching late-created tables
 	setInterval(() => {
 		if (frappe.query_report && frappe.query_report.datatable) {
 			nexlify_reports.observe_datatable(frappe.query_report.datatable);
@@ -534,7 +497,6 @@ nexlify_reports.watch_and_bind = function () {
 };
 
 nexlify_reports.cleanup_orphaned_styles = function () {
-	// Remove style tags whose instance class no longer exists in the DOM
 	document.querySelectorAll("style[id^='nexlify-autofit-style-']").forEach((styleEl) => {
 		const id = styleEl.id.replace("nexlify-autofit-style-", "");
 		if (!document.querySelector("." + id)) {
@@ -552,7 +514,7 @@ $(document).on("page-change", function () {
 });
 
 // ============================================================
-// Global DataTable constructor hook
+// DataTable constructor hook
 // ============================================================
 
 nexlify_reports.hook_datatable_constructor = function () {
@@ -598,7 +560,7 @@ nexlify_reports.hook_datatable_constructor = function () {
 };
 
 // ============================================================
-// Column resize + double-click passthrough
+// Resize + double-click passthrough
 // ============================================================
 
 let nexlifyResizing = false;
@@ -679,7 +641,7 @@ $(document).on("dblclick", ".datatable .dt-row-header .dt-cell", function (e) {
 });
 
 // ============================================================
-// Excel-style column value filter
+// Excel-style value filter
 // ============================================================
 
 nexlify_reports.esc_html = function (text) {
@@ -793,8 +755,9 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	inputEl.value = "";
 
 	const rect = inputEl.getBoundingClientRect();
-	const isRTL = (document.documentElement.dir || "").toLowerCase() === "rtl"
-		|| (document.body.dir || "").toLowerCase() === "rtl";
+	const isRTL =
+		(document.documentElement.dir || "").toLowerCase() === "rtl" ||
+		(document.body.dir || "").toLowerCase() === "rtl";
 
 	const $popup = $(`
 		<div class="nexlify-filter-popup">
@@ -814,13 +777,7 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	`);
 
 	const popupWidth = 230;
-	let leftPos = rect.left;
-
-	if (isRTL) {
-		// Align to the right edge of the input in RTL
-		leftPos = rect.right - popupWidth;
-	}
-
+	let leftPos = isRTL ? rect.right - popupWidth : rect.left;
 	const maxLeft = window.innerWidth - popupWidth - 8;
 	if (leftPos > maxLeft) leftPos = Math.max(maxLeft, 8);
 	if (leftPos < 8) leftPos = 8;
@@ -953,7 +910,7 @@ nexlify_reports.bind_search_boxes = function (datatable) {
 };
 
 // ============================================================
-// Safety net for tables that missed the constructor hook
+// Safety net
 // ============================================================
 
 nexlify_reports.ensure_table_covered = function (wrapperEl) {
@@ -973,7 +930,7 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 
 	nexlify_reports.watch_container_resize(wrapperEl);
 
-	const key = nexlify_reports.get_report_base_key() + ":dom-fallback:v8";
+	const key = nexlify_reports.get_report_base_key() + ":dom-fallback:v9";
 	wrapperEl.__nexlify_persist_key = key;
 
 	const saved = nexlify_reports.load_widths(key);
