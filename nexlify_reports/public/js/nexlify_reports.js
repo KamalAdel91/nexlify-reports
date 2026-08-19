@@ -27,8 +27,7 @@ nexlify_reports.get_or_create_style_tag = function (instanceClass) {
 	return styleEl;
 };
 
-// Single place that ever writes column-width CSS. Every code path below
-// (initial autofit, buttons, resize, double-click) funnels through this.
+// Single place that ever writes column-width CSS.
 nexlify_reports.write_width_rules = function (wrapperEl, widths) {
 	const instanceClass = nexlify_reports.get_instance_class(wrapperEl);
 	if (!instanceClass) return;
@@ -42,9 +41,6 @@ nexlify_reports.write_width_rules = function (wrapperEl, widths) {
 	styleEl.textContent = rules.join("\n");
 };
 
-// Remove just one column's rule (used while a manual resize or the
-// library's own native double-click-autofit is in progress, so our
-// permanent !important rule doesn't block it).
 nexlify_reports.remove_width_rule_for_column = function (wrapperEl, colIndex) {
 	const instanceClass = nexlify_reports.get_instance_class(wrapperEl);
 	if (!instanceClass) return;
@@ -60,7 +56,8 @@ nexlify_reports.remove_width_rule_for_column = function (wrapperEl, colIndex) {
 		.join("\n");
 };
 
-// Measures the widest rendered content per column (canvas text metrics).
+// Measures the widest rendered content per column.
+// Samples font from both header and body for better accuracy.
 nexlify_reports.compute_content_widths = function (wrapperEl) {
 	const $wrapper = $(wrapperEl);
 	const colIndices = new Set();
@@ -69,29 +66,50 @@ nexlify_reports.compute_content_widths = function (wrapperEl) {
 	});
 	if (!colIndices.size) return null;
 
-	const sampleContent = $wrapper.find(".dt-cell__content").get(0);
+	// Prefer body cell, fallback to header
+	let sampleContent = $wrapper.find(".dt-row:not(.dt-row-header) .dt-cell__content").get(0)
+		|| $wrapper.find(".dt-cell__content").get(0);
+
 	let font = "12px sans-serif";
 	if (sampleContent) {
 		const cs = getComputedStyle(sampleContent);
 		font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
 	}
 
+	// Also measure header font (often bolder)
+	const headerSample = $wrapper.find(".dt-row-header .dt-cell__content").get(0);
+	let headerFont = font;
+	if (headerSample) {
+		const hcs = getComputedStyle(headerSample);
+		headerFont = `${hcs.fontWeight} ${hcs.fontSize} ${hcs.fontFamily}`;
+	}
+
 	const widths = {};
 	colIndices.forEach((colIndex) => {
 		let maxWidth = 40;
-		$wrapper.find(`[data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
+
+		// Header
+		$wrapper.find(`.dt-row-header [data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
+			const text = this.getAttribute("title") || this.textContent || "";
+			const w = nexlify_reports.measure_text_width(text.trim(), headerFont);
+			if (w > maxWidth) maxWidth = w;
+		});
+
+		// Body
+		$wrapper.find(`.dt-row:not(.dt-row-header) [data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
 			const text = this.getAttribute("title") || this.textContent || "";
 			const w = nexlify_reports.measure_text_width(text.trim(), font);
 			if (w > maxWidth) maxWidth = w;
 		});
+
+		// +32 for padding + sort icon + filter icon space
 		widths[colIndex] = maxWidth + 32;
 	});
 	return widths;
 };
 
 // ============================================================
-// Persistence (Report View / List View / any table remembers its
-// own column widths across visits, keyed by report/route/dialog)
+// Persistence
 // ============================================================
 
 nexlify_reports.get_report_base_key = function () {
@@ -113,11 +131,8 @@ nexlify_reports.get_column_signature = function (datatable) {
 };
 
 nexlify_reports.get_report_key = function (datatable) {
-	// ":v3" invalidates any widths saved by earlier versions of this
-	// engine (including the floor-only stretch math that lost pixels to
-	// rounding), so the current, verified-correct calculation always
-	// runs at least once instead of an old cached result being reused.
-	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable) + ":v7";
+	// :v8 → cache invalidation after measurement + stretch fixes
+	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable) + ":v8";
 };
 
 nexlify_reports.save_widths = function (key, widths) {
@@ -139,15 +154,41 @@ nexlify_reports.load_widths = function (key) {
 // Cell formatting: negative numbers in red, zero amounts as "-"
 // ============================================================
 
-nexlify_reports.ZERO_CURRENCY_RE = /^([A-Za-z]{2,5}\s+)?0(\.0+)?$/;
+nexlify_reports.ZERO_CURRENCY_RE = /^([A-Za-z]{2,5}\s*)?[0]+([.,]0+)?\s*([A-Za-z]{2,5})?$/;
+
+nexlify_reports.is_zero_value = function (text) {
+	const t = (text || "").trim();
+	if (!t || t === "-") return true;
+	// pure zero variants
+	if (nexlify_reports.ZERO_CURRENCY_RE.test(t)) return true;
+	// numeric check after stripping currency letters and spaces
+	const cleaned = t.replace(/[A-Za-z\s]/g, "").replace(/,/g, "");
+	const num = parseFloat(cleaned);
+	return !isNaN(num) && num === 0;
+};
+
+nexlify_reports.is_negative_value = function (text) {
+	const t = (text || "").trim();
+	if (!t) return false;
+
+	// Accounting style: (123.45)
+	if (/^\([\d.,\s]+\)$/.test(t.replace(/[A-Za-z]/g, ""))) return true;
+
+	// Normal negative: -123.45 or - EGP 123 etc.
+	const cleaned = t.replace(/[A-Za-z\s]/g, "").replace(/,/g, "");
+	if (cleaned.startsWith("-")) {
+		const num = parseFloat(cleaned);
+		return !isNaN(num) && num < 0;
+	}
+	return false;
+};
 
 nexlify_reports.apply_zero_dash = function (wrapperEl) {
 	$(wrapperEl)
 		.find(".dt-row[data-row-index] .dt-cell__content")
 		.each(function () {
 			const original = this.getAttribute("title") || this.textContent || "";
-			const isZeroCurrency = nexlify_reports.ZERO_CURRENCY_RE.test(original.trim());
-			if (isZeroCurrency) {
+			if (nexlify_reports.is_zero_value(original)) {
 				if (this.textContent.trim() !== "-") this.textContent = "-";
 			} else if (this.textContent.trim() === "-" && original.trim() !== "-" && original.trim() !== "") {
 				this.textContent = original;
@@ -160,87 +201,95 @@ nexlify_reports.highlight_negative_numbers_dom = function (wrapperEl) {
 		.find(".dt-row[data-row-index] .dt-cell__content")
 		.each(function () {
 			const text = (this.textContent || "").trim();
-			const isNegativeNumber = /^-[\d.,]+$/.test(text.replace(/[A-Za-z]/g, "").trim());
-			$(this).toggleClass("nexlify-negative", isNegativeNumber);
+			const isNegative = nexlify_reports.is_negative_value(text);
+			$(this).toggleClass("nexlify-negative", isNegative);
 		});
 	nexlify_reports.apply_zero_dash(wrapperEl);
 };
 
-// If the columns' total width is narrower than the available container,
-// stretch every column proportionally to fill it. Math.floor on each
-// column individually loses up to ~1px per column to rounding, so the
-// leftover pixels are distributed back across the columns afterward
-// instead of being dropped - the final total then matches the
-// container width exactly (verified: zero gap).
+// ============================================================
+// Stretch logic – fixed overflow with few columns
+// ============================================================
+
 nexlify_reports.stretch_widths_to_fill = function (wrapperEl, widths) {
 	const total = Object.values(widths).reduce((a, b) => a + b, 0);
-	// Measure .datatable's immediate parent, not .datatable itself or
-	// .dt-scrollable inside it. .dt-scrollable's width is circularly
-	// determined by the column widths we're setting, and .datatable
-	// itself can carry its own padding/margin that shrinks it below the
-	// true available width in some contexts (Report View) while being
-	// flush with it in others (custom pages) - the parent is the one
-	// consistent, non-circular reference in both cases.
-	const measureEl = wrapperEl.parentElement || wrapperEl;
-	const containerWidth = measureEl.getBoundingClientRect().width;
-	if (!(containerWidth > 0 && total > 0)) return widths;
+	if (!(total > 0)) return widths;
 
-	const scale = containerWidth / total;
+	// أدق قياس متاح
+	const scrollable = wrapperEl.querySelector(".dt-scrollable");
+	let containerWidth = 0;
 
-	// Only shrink when the container is moderately narrower than the
-	// content (e.g. the window got smaller after the table had already
-	// stretched to fit a wider one). A table that genuinely needs far
-	// more room than any viewport (many-column reports like General
-	// Ledger) should keep its natural content widths and scroll
-	// horizontally, not get crushed down to the minimum floor.
+	if (scrollable) {
+		containerWidth = scrollable.clientWidth;
+	}
+	if (!(containerWidth > 0)) {
+		const measureEl = wrapperEl.parentElement || wrapperEl;
+		containerWidth = measureEl.clientWidth || Math.floor(measureEl.getBoundingClientRect().width);
+	}
+	if (!(containerWidth > 0)) return widths;
+
+	const SAFETY_MARGIN = 2;
+	const available = Math.max(0, containerWidth - SAFETY_MARGIN);
+
+	const scale = available / total;
+
+	// لو المحتوى أضيق من الحاوية → متعملش stretch، سيب الأعمدة على حجمها الطبيعي
+	if (scale >= 1) {
+		return widths;
+	}
+
+	// لو الفرق كبير أوي (جدول عريض جدًا) → متسحقوش، سيب الـ horizontal scroll
 	if (scale < 0.7) {
 		return widths;
 	}
 
-	// Grow columns when there's extra space, and shrink them back down
-	// (within the 0.7+ range above) when the container got moderately
-	// narrower - only stretching upward left already-wide columns
-	// permanently oversized after the window later shrank, which is
-	// what caused the "gap only closes one direction" bug.
+	// هنا بس: الحاوية أضيق شوية → صغّر الأعمدة بشكل متناسب
 	const MIN_COL_WIDTH = 40;
 	const keys = Object.keys(widths);
 	const scaled = {};
 	let scaledTotal = 0;
+
 	keys.forEach((colIndex) => {
 		const w = Math.max(MIN_COL_WIDTH, Math.floor(widths[colIndex] * scale));
 		scaled[colIndex] = w;
 		scaledTotal += w;
 	});
 
-	let remainder = Math.round(containerWidth - scaledTotal);
-	for (let i = 0; i < keys.length && remainder > 0; i++, remainder--) {
-		scaled[keys[i]] += 1;
+	// وزّع الـ remainder (يزيد أو ينقص) عشان المجموع يبقى قريب من available
+	let remainder = Math.round(available - scaledTotal);
+
+	if (remainder > 0) {
+		for (let i = 0; i < keys.length && remainder > 0; i++, remainder--) {
+			scaled[keys[i]] += 1;
+		}
+	} else if (remainder < 0) {
+		const sorted = keys.slice().sort((a, b) => scaled[b] - scaled[a]);
+		for (let i = 0; i < sorted.length && remainder < 0; i++) {
+			if (scaled[sorted[i]] > MIN_COL_WIDTH) {
+				scaled[sorted[i]] -= 1;
+				remainder += 1;
+			}
+		}
 	}
 
 	return scaled;
 };
 
-// Watches the table's real container for ANY size change (window
-// resize, DevTools opening/closing, sidebar collapsing, browser zoom,
-// etc.) and re-fits the columns to match - so the layout always adapts
-// to whatever the actual current size is, instead of being locked to
-// whatever it happened to be at the first measurement.
+// ============================================================
+// Resize observer
+// ============================================================
+
 nexlify_reports.watch_container_resize = function (wrapperEl) {
 	if (wrapperEl.__nexlify_resize_watched) return;
 	wrapperEl.__nexlify_resize_watched = true;
 
 	if (!window.ResizeObserver) return;
 
-	const measureEl = wrapperEl.parentElement || wrapperEl;
+	const measureEl = wrapperEl.querySelector(".dt-scrollable") || wrapperEl.parentElement || wrapperEl;
 
-	// Wait for the initial fit_columns/apply_saved_widths sequence
-	// (setTimeout 150 + two animation frames) to fully settle before we
-	// start observing. Attaching immediately caused a race where the
-	// observer's own forced first callback would re-fit using a
-	// transitional, not-yet-final width and override the correct result.
 	setTimeout(() => {
 		let resizeTimer = null;
-		let lastWidth = measureEl.getBoundingClientRect().width;
+		let lastWidth = measureEl.clientWidth || measureEl.getBoundingClientRect().width;
 
 		const ro = new ResizeObserver((entries) => {
 			if (nexlifyResizing) return;
@@ -255,12 +304,14 @@ nexlify_reports.watch_container_resize = function (wrapperEl) {
 			}, 150);
 		});
 		ro.observe(measureEl);
+
+		// keep reference for possible future disconnect
+		wrapperEl.__nexlify_ro = ro;
 	}, 600);
 };
 
 // ============================================================
-// The one entry point for computing + applying column widths.
-// Used by: initial load, Autofit button/toolbar, Reset columns.
+// Core fit / apply entry points
 // ============================================================
 
 nexlify_reports.fit_columns = function (wrapperEl, opts) {
@@ -268,9 +319,6 @@ nexlify_reports.fit_columns = function (wrapperEl, opts) {
 	const widths = nexlify_reports.compute_content_widths(wrapperEl);
 	if (!widths) return;
 
-	// Apply immediately so the table isn't left unstyled while we wait a
-	// couple of frames for the surrounding page layout to settle before
-	// measuring the real container width.
 	nexlify_reports.write_width_rules(wrapperEl, widths);
 	nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
 
@@ -283,9 +331,6 @@ nexlify_reports.fit_columns = function (wrapperEl, opts) {
 	});
 };
 
-// Re-apply previously saved widths, but still re-stretch them to fill the
-// CURRENT container width, since it may differ from when they were saved
-// (sidebar collapsed, window resized, etc).
 nexlify_reports.apply_saved_widths = function (wrapperEl, widths) {
 	nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
 	nexlify_reports.write_width_rules(wrapperEl, widths);
@@ -310,16 +355,12 @@ nexlify_reports.apply_saved_or_autofit = function (datatable, wrapperEl) {
 	}
 };
 
-// Kept as a thin, explicit-name alias since the floating toolbar and a
-// few other call sites refer to "autofit" - it's the same engine either
-// way, with or without persistence.
 nexlify_reports.autofit_columns_dom = function (wrapperEl) {
 	nexlify_reports.fit_columns(wrapperEl, { persistKey: wrapperEl.__nexlify_persist_key || null });
 };
 
 // ============================================================
-// Floating Autofit / Reset toolbar for tables outside Report View /
-// List View (dialogs, custom pages like Bank Reconciliation Tool).
+// Floating toolbar (dialogs / custom pages)
 // ============================================================
 
 nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
@@ -353,7 +394,7 @@ nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
 };
 
 // ============================================================
-// Page-level Autofit / Reset buttons for Report View / List View
+// Page-level buttons (Report View / List View)
 // ============================================================
 
 nexlify_reports.ensure_buttons = function (pageObj, datatableGetter) {
@@ -409,8 +450,7 @@ nexlify_reports.setup_report = function () {
 };
 
 // ============================================================
-// Watching a single table instance: initial fit + re-fit on real
-// data changes (not on every virtual-scroll re-render).
+// Observe a single datatable instance
 // ============================================================
 
 nexlify_reports.observe_datatable = function (datatable) {
@@ -424,9 +464,6 @@ nexlify_reports.observe_datatable = function (datatable) {
 		(frappe.query_report && frappe.query_report.datatable === datatable) ||
 		(window.cur_list && cur_list.datatable === datatable);
 
-	// Report View / List View get page-toolbar buttons via setup_report;
-	// everything else (dialogs, custom pages) gets a small floating
-	// toolbar directly above the table instead.
 	if (!isReportOrList) {
 		nexlify_reports.ensure_floating_toolbar(wrapperEl);
 	}
@@ -444,9 +481,6 @@ nexlify_reports.observe_datatable = function (datatable) {
 	let sawEmpty = false;
 	let rafPending = false;
 
-	// All work below runs at most once per animation frame - not once per
-	// raw MutationObserver callback, which can fire many times per frame
-	// during fast/virtualized scrolling and would otherwise cause jank.
 	const observer = new MutationObserver(() => {
 		if (rafPending) return;
 		rafPending = true;
@@ -460,9 +494,6 @@ nexlify_reports.observe_datatable = function (datatable) {
 				return;
 			}
 
-			// Re-apply negative/zero formatting on every re-render, even a
-			// plain scroll - frappe-datatable recycles row DOM nodes, so
-			// newly-shown rows need this re-applied. Cheap, safe to repeat.
 			nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
 
 			const currentSignature = nexlify_reports.get_column_signature(datatable);
@@ -480,9 +511,15 @@ nexlify_reports.observe_datatable = function (datatable) {
 	});
 
 	observer.observe(bodyEl, { childList: true, subtree: true });
+	wrapperEl.__nexlify_mo = observer;
 };
 
+// ============================================================
+// Polling + page-change cleanup
+// ============================================================
+
 nexlify_reports.watch_and_bind = function () {
+	// Slightly slower interval – less CPU while still catching late-created tables
 	setInterval(() => {
 		if (frappe.query_report && frappe.query_report.datatable) {
 			nexlify_reports.observe_datatable(frappe.query_report.datatable);
@@ -493,19 +530,29 @@ nexlify_reports.watch_and_bind = function () {
 			nexlify_reports.bind_search_boxes(cur_list.datatable);
 		}
 		nexlify_reports.setup_report();
-	}, 800);
+	}, 1200);
+};
+
+nexlify_reports.cleanup_orphaned_styles = function () {
+	// Remove style tags whose instance class no longer exists in the DOM
+	document.querySelectorAll("style[id^='nexlify-autofit-style-']").forEach((styleEl) => {
+		const id = styleEl.id.replace("nexlify-autofit-style-", "");
+		if (!document.querySelector("." + id)) {
+			styleEl.remove();
+		}
+	});
 };
 
 $(document).on("page-change", function () {
 	frappe.after_ajax(() => {
 		setTimeout(nexlify_reports.setup_report, 300);
 		nexlify_reports.close_value_popup();
+		nexlify_reports.cleanup_orphaned_styles();
 	});
 });
 
 // ============================================================
-// Global hook: every frappe-datatable created anywhere on the desk
-// (Report View, List View, dialogs, custom pages) goes through here.
+// Global DataTable constructor hook
 // ============================================================
 
 nexlify_reports.hook_datatable_constructor = function () {
@@ -520,11 +567,6 @@ nexlify_reports.hook_datatable_constructor = function () {
 		}
 		const Wrapped = function (wrapper, options) {
 			options = options || {};
-			// "fluid" layout keeps total table width constant, so resizing
-			// one column silently shrinks/grows the others to compensate.
-			// "fixed" makes every column independent. Our own width engine
-			// already handles filling the container, so we don't lose that
-			// behavior by switching this.
 			options.layout = "fixed";
 			const instance = new OriginalDataTable(wrapper, options);
 			setTimeout(() => {
@@ -556,7 +598,7 @@ nexlify_reports.hook_datatable_constructor = function () {
 };
 
 // ============================================================
-// Column resize (drag) and native double-click autofit passthrough
+// Column resize + double-click passthrough
 // ============================================================
 
 let nexlifyResizing = false;
@@ -580,9 +622,6 @@ nexlify_reports.sync_widths_from_header = function (wrapperEl) {
 	}
 };
 
-// frappe-datatable detects a resize drag by cursor proximity to the
-// column edge, not via a dedicated handle element - so we do the same
-// check here instead of depending on an internal class name.
 $(document).on("mousedown", ".datatable .dt-row-header .dt-cell", function (e) {
 	const rect = this.getBoundingClientRect();
 	const nearRightEdge = rect.right - e.clientX <= NEXLIFY_RESIZE_EDGE_PX;
@@ -596,11 +635,6 @@ $(document).on("mousedown", ".datatable .dt-row-header .dt-cell", function (e) {
 	const startX = e.clientX;
 	let armed = false;
 
-	// Do NOT touch the stylesheet yet - a mousedown alone (a plain click
-	// with no movement) must leave every column exactly as it is. Only
-	// once the mouse actually moves a few pixels do we treat this as a
-	// real resize drag and free the dragged column's own rule so the
-	// library can control it.
 	const onFirstMove = function (moveEvt) {
 		if (armed) return;
 		if (Math.abs(moveEvt.clientX - startX) < 2) return;
@@ -622,18 +656,11 @@ $(document).on("mouseup", function () {
 	if (!nexlifyResizing) return;
 	nexlifyResizing = false;
 
-	// The library has now committed its own final widths for every
-	// column. Read that ground truth from the DOM and write it into our
-	// own stylesheet (stretched to fill) as the new authoritative record.
 	$(".datatable").each(function () {
 		nexlify_reports.sync_widths_from_header(this);
 	});
 });
 
-// Double-click near a column edge triggers the library's own native
-// column autofit. Clear just that column's rule first, let the library
-// do its thing, then capture the real result back afterwards - same
-// pattern used for manual drag-resize above.
 $(document).on("dblclick", ".datatable .dt-row-header .dt-cell", function (e) {
 	const rect = this.getBoundingClientRect();
 	const nearRightEdge = rect.right - e.clientX <= NEXLIFY_RESIZE_EDGE_PX;
@@ -652,7 +679,7 @@ $(document).on("dblclick", ".datatable .dt-row-header .dt-cell", function (e) {
 });
 
 // ============================================================
-// Excel-style column value filter (search box popup)
+// Excel-style column value filter
 // ============================================================
 
 nexlify_reports.esc_html = function (text) {
@@ -766,6 +793,8 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	inputEl.value = "";
 
 	const rect = inputEl.getBoundingClientRect();
+	const isRTL = (document.documentElement.dir || "").toLowerCase() === "rtl"
+		|| (document.body.dir || "").toLowerCase() === "rtl";
 
 	const $popup = $(`
 		<div class="nexlify-filter-popup">
@@ -786,10 +815,15 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 
 	const popupWidth = 230;
 	let leftPos = rect.left;
-	const maxLeft = window.innerWidth - popupWidth - 8;
-	if (leftPos > maxLeft) {
-		leftPos = Math.max(maxLeft, 8);
+
+	if (isRTL) {
+		// Align to the right edge of the input in RTL
+		leftPos = rect.right - popupWidth;
 	}
+
+	const maxLeft = window.innerWidth - popupWidth - 8;
+	if (leftPos > maxLeft) leftPos = Math.max(maxLeft, 8);
+	if (leftPos < 8) leftPos = 8;
 
 	$popup.css({
 		top: rect.bottom + 2 + "px",
@@ -919,16 +953,11 @@ nexlify_reports.bind_search_boxes = function (datatable) {
 };
 
 // ============================================================
-// Safety net: catch any .datatable element that, for whatever reason,
-// didn't go through observe_datatable() via the constructor hook above
-// (e.g. an instance created before the hook installed, or a bundle
-// context we haven't accounted for). This does NOT duplicate any width
-// math - it only calls the exact same fit_columns/ensure_floating_toolbar
-// functions used everywhere else, just from a different trigger.
+// Safety net for tables that missed the constructor hook
 // ============================================================
 
 nexlify_reports.ensure_table_covered = function (wrapperEl) {
-	if (wrapperEl.__nexlify_persist_key) return; // already handled by observe_datatable
+	if (wrapperEl.__nexlify_persist_key) return;
 
 	const isReportOrList =
 		(frappe.query_report && frappe.query_report.datatable
@@ -936,7 +965,7 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 		(window.cur_list && cur_list.datatable
 			&& $(cur_list.datatable.wrapper).find(".datatable")[0] === wrapperEl);
 
-	if (isReportOrList) return; // these are covered by watch_and_bind's polling instead
+	if (isReportOrList) return;
 
 	if (!wrapperEl.__nexlify_toolbar_added) {
 		nexlify_reports.ensure_floating_toolbar(wrapperEl);
@@ -944,7 +973,7 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 
 	nexlify_reports.watch_container_resize(wrapperEl);
 
-	const key = nexlify_reports.get_report_base_key() + ":dom-fallback:v7";
+	const key = nexlify_reports.get_report_base_key() + ":dom-fallback:v8";
 	wrapperEl.__nexlify_persist_key = key;
 
 	const saved = nexlify_reports.load_widths(key);
@@ -964,8 +993,6 @@ nexlify_reports.watch_uncovered_tables = function () {
 	const process_wrapper = (wrapperEl) => {
 		if (nexlifyResizing) return;
 		if (wrapperEl.__nexlify_persist_key) {
-			// Already covered - still keep negative/zero formatting fresh
-			// on scroll-recycled rows, cheaply.
 			nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
 			return;
 		}
@@ -1004,6 +1031,10 @@ nexlify_reports.watch_uncovered_tables = function () {
 
 	bodyObserver.observe(document.body, { childList: true, subtree: true });
 };
+
+// ============================================================
+// Boot
+// ============================================================
 
 $(document).ready(function () {
 	nexlify_reports.hook_datatable_constructor();
