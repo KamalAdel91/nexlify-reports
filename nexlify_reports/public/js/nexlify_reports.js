@@ -1,6 +1,12 @@
 frappe.provide("nexlify_reports");
 
 // ============================================================
+// Constants
+// ============================================================
+
+const NEXLIFY_CACHE_VERSION = "v9"; // bump this if the persisted width schema changes
+
+// ============================================================
 // Low-level helpers
 // ============================================================
 
@@ -58,14 +64,14 @@ nexlify_reports.remove_width_rule_for_column = function (wrapperEl, colIndex) {
 // ============================================================
 // Content width calculation (smarter minimums for headers)
 // ============================================================
+// NOTE: single pass over `.dt-cell[data-col-index]` instead of two
+// separate `.find()` calls per column (one for header, one for body).
+// For an N-column table this turns ~2N DOM queries into 1.
 
 nexlify_reports.compute_content_widths = function (wrapperEl) {
 	const $wrapper = $(wrapperEl);
-	const colIndices = new Set();
-	$wrapper.find("[data-col-index]").each(function () {
-		colIndices.add(this.getAttribute("data-col-index"));
-	});
-	if (!colIndices.size) return null;
+	const $cells = $wrapper.find(".dt-cell[data-col-index]");
+	if (!$cells.length) return null;
 
 	let sampleContent = $wrapper.find(".dt-row:not(.dt-row-header) .dt-cell__content").get(0)
 		|| $wrapper.find(".dt-cell__content").get(0);
@@ -84,26 +90,26 @@ nexlify_reports.compute_content_widths = function (wrapperEl) {
 	}
 
 	const widths = {};
-	colIndices.forEach((colIndex) => {
-		let maxWidth = 60; // minimum comfortable width
 
-		// Header text (critical for readability)
-		$wrapper.find(`.dt-row-header [data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
-			const text = this.getAttribute("title") || this.textContent || "";
-			const w = nexlify_reports.measure_text_width(text.trim(), headerFont);
-			if (w > maxWidth) maxWidth = w;
-		});
+	$cells.each(function () {
+		const colIndex = this.getAttribute("data-col-index");
+		const contentEl = this.querySelector(".dt-cell__content");
+		if (!contentEl) return;
 
-		// Body content
-		$wrapper.find(`.dt-row:not(.dt-row-header) [data-col-index="${colIndex}"] .dt-cell__content`).each(function () {
-			const text = this.getAttribute("title") || this.textContent || "";
-			const w = nexlify_reports.measure_text_width(text.trim(), font);
-			if (w > maxWidth) maxWidth = w;
-		});
+		if (!(colIndex in widths)) widths[colIndex] = 60; // minimum comfortable width
 
-		// padding + sort/filter icons
-		widths[colIndex] = Math.ceil(maxWidth + 36);
+		const isHeader = !!this.closest(".dt-row-header");
+		const text = contentEl.getAttribute("title") || contentEl.textContent || "";
+		const w = nexlify_reports.measure_text_width(text.trim(), isHeader ? headerFont : font);
+
+		if (w > widths[colIndex]) widths[colIndex] = w;
 	});
+
+	Object.keys(widths).forEach((colIndex) => {
+		// padding + sort/filter icons
+		widths[colIndex] = Math.ceil(widths[colIndex] + 36);
+	});
+
 	return widths;
 };
 
@@ -130,13 +136,15 @@ nexlify_reports.get_column_signature = function (datatable) {
 };
 
 nexlify_reports.get_report_key = function (datatable) {
-	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable) + ":v9";
+	return nexlify_reports.get_report_base_key() + ":" + nexlify_reports.get_column_signature(datatable) + ":" + NEXLIFY_CACHE_VERSION;
 };
 
 nexlify_reports.save_widths = function (key, widths) {
 	try {
 		localStorage.setItem("nexlify_col_widths:" + key, JSON.stringify(widths));
-	} catch (e) {}
+	} catch (e) {
+		console.warn("[Nexlify] Failed to save column widths:", e);
+	}
 };
 
 nexlify_reports.load_widths = function (key) {
@@ -144,6 +152,7 @@ nexlify_reports.load_widths = function (key) {
 		const raw = localStorage.getItem("nexlify_col_widths:" + key);
 		return raw ? JSON.parse(raw) : null;
 	} catch (e) {
+		console.warn("[Nexlify] Failed to load column widths:", e);
 		return null;
 	}
 };
@@ -151,11 +160,41 @@ nexlify_reports.load_widths = function (key) {
 // ============================================================
 // Cell formatting
 // ============================================================
+// Numeric parsing best-effort: handles both "1,234.56" (comma = thousands)
+// and "1.234,56" (comma = decimal, dot = thousands) locale styles.
+
+nexlify_reports.normalize_numeric_string = function (rawText) {
+	let t = (rawText || "").trim().replace(/[A-Za-z\s]/g, "");
+	const hasComma = t.indexOf(",") !== -1;
+	const hasDot = t.indexOf(".") !== -1;
+
+	if (hasComma && hasDot) {
+		// whichever separator appears last is the decimal separator
+		const lastComma = t.lastIndexOf(",");
+		const lastDot = t.lastIndexOf(".");
+		if (lastComma > lastDot) {
+			// comma is decimal → strip dots (thousands), replace comma with dot
+			t = t.replace(/\./g, "").replace(",", ".");
+		} else {
+			// dot is decimal → strip commas (thousands)
+			t = t.replace(/,/g, "");
+		}
+	} else if (hasComma) {
+		// only comma present: treat as decimal separator if followed by 1-2 digits
+		// at the end, otherwise treat as thousands grouping
+		if (/,\d{1,2}$/.test(t)) {
+			t = t.replace(",", ".");
+		} else {
+			t = t.replace(/,/g, "");
+		}
+	}
+	return t;
+};
 
 nexlify_reports.is_zero_value = function (text) {
 	const t = (text || "").trim();
 	if (!t || t === "-") return true;
-	const cleaned = t.replace(/[A-Za-z\s]/g, "").replace(/,/g, "");
+	const cleaned = nexlify_reports.normalize_numeric_string(t);
 	const num = parseFloat(cleaned);
 	return !isNaN(num) && num === 0;
 };
@@ -165,7 +204,7 @@ nexlify_reports.is_negative_value = function (text) {
 	if (!t) return false;
 	// accounting format (123.45)
 	if (/^\([\d.,\s]+\)$/.test(t.replace(/[A-Za-z]/g, ""))) return true;
-	const cleaned = t.replace(/[A-Za-z\s]/g, "").replace(/,/g, "");
+	const cleaned = nexlify_reports.normalize_numeric_string(t);
 	if (cleaned.startsWith("-")) {
 		const num = parseFloat(cleaned);
 		return !isNaN(num) && num < 0;
@@ -196,13 +235,27 @@ nexlify_reports.highlight_negative_numbers_dom = function (wrapperEl) {
 	nexlify_reports.apply_zero_dash(wrapperEl);
 };
 
+// Coalesces repeated highlight requests (e.g. many mutation records fired
+// during virtual-scroll row swapping) into a single rAF-scheduled pass per
+// wrapper, instead of running the full DOM sweep once per mutation.
+nexlify_reports._highlight_scheduled = new WeakSet();
+
+nexlify_reports.schedule_highlight = function (wrapperEl) {
+	if (nexlify_reports._highlight_scheduled.has(wrapperEl)) return;
+	nexlify_reports._highlight_scheduled.add(wrapperEl);
+	requestAnimationFrame(() => {
+		nexlify_reports._highlight_scheduled.delete(wrapperEl);
+		nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
+	});
+};
+
 // ============================================================
 // Smart stretch – never force expand
 // ============================================================
 
 nexlify_reports.stretch_widths_to_fill = function (wrapperEl, widths) {
-	// مفيش تمدد إجباري + مفيش تصغير إجباري
-	// الجداول العريضة تفضل عريضة ويظهر فيها scrollbar أفقي
+	// no forced stretching and no forced shrinking:
+	// wide tables stay wide and scroll horizontally instead
 	return widths;
 };
 
@@ -222,7 +275,9 @@ nexlify_reports.check_and_invalidate_on_resize = function (wrapperEl) {
 		if (wrapperEl.__nexlify_persist_key) {
 			try {
 				localStorage.removeItem("nexlify_col_widths:" + wrapperEl.__nexlify_persist_key);
-			} catch (e) {}
+			} catch (e) {
+				console.warn("[Nexlify] Failed to clear cached widths:", e);
+			}
 		}
 		nexlify_reports.fit_columns(wrapperEl, {
 			persistKey: wrapperEl.__nexlify_persist_key || null
@@ -348,7 +403,9 @@ nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
 		if (wrapperEl.__nexlify_persist_key) {
 			try {
 				localStorage.removeItem("nexlify_col_widths:" + wrapperEl.__nexlify_persist_key);
-			} catch (e) {}
+			} catch (e) {
+				console.warn("[Nexlify] Failed to clear cached widths:", e);
+			}
 		}
 		nexlify_reports.fit_columns(wrapperEl, {
 			persistKey: wrapperEl.__nexlify_persist_key || null
@@ -390,7 +447,9 @@ nexlify_reports.ensure_buttons = function (pageObj, datatableGetter) {
 					const key = nexlify_reports.get_report_key(dt);
 					try {
 						localStorage.removeItem("nexlify_col_widths:" + key);
-					} catch (e) {}
+					} catch (e) {
+						console.warn("[Nexlify] Failed to clear cached widths:", e);
+					}
 					nexlify_reports.fit_columns(wrapperEl, { persistKey: key });
 					frappe.show_alert({ message: __("Columns reset to default"), indicator: "green" });
 				}
@@ -422,6 +481,11 @@ nexlify_reports.observe_datatable = function (datatable) {
 
 	const wrapperEl = $(datatable.wrapper).find(".datatable")[0];
 	if (!wrapperEl) return;
+
+	// mark the element itself (not just the datatable object) so the
+	// body-level fallback observer can recognize it's already covered
+	wrapperEl.__nexlify_observed = true;
+	nexlify_reports._tracked_wrappers.add(wrapperEl);
 
 	const isReportOrList =
 		(frappe.query_report && frappe.query_report.datatable === datatable) ||
@@ -457,7 +521,9 @@ nexlify_reports.observe_datatable = function (datatable) {
 				return;
 			}
 
-			nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
+			// throttled/coalesced pass instead of a synchronous full sweep
+			// on every mutation batch (virtual scroll can fire many of these)
+			nexlify_reports.schedule_highlight(wrapperEl);
 
 			const currentSignature = nexlify_reports.get_column_signature(datatable);
 			const columnsChanged =
@@ -494,6 +560,12 @@ nexlify_reports.watch_and_bind = function () {
 		}
 		nexlify_reports.setup_report();
 	}, 1200);
+	// NOTE: this interval keeps running for the lifetime of the page even
+	// when no report/list is present. The checks above are cheap, but a
+	// fuller fix would hook frappe's own render-complete/page-change
+	// events instead of polling. Left as-is here since that requires
+	// confirming which events are reliably fired across report/list/dialog
+	// contexts in your frappe version.
 };
 
 nexlify_reports.cleanup_orphaned_styles = function () {
@@ -505,11 +577,39 @@ nexlify_reports.cleanup_orphaned_styles = function () {
 	});
 };
 
+// Disconnects ResizeObserver/MutationObserver instances for wrapper
+// elements that have been removed from the DOM (e.g. after navigating
+// away from a report), so they don't keep firing/leaking memory.
+nexlify_reports._tracked_wrappers = new Set();
+
+nexlify_reports.cleanup_detached_observers = function () {
+	nexlify_reports._tracked_wrappers.forEach((wrapperEl) => {
+		if (!document.body.contains(wrapperEl)) {
+			if (wrapperEl.__nexlify_ro) {
+				try {
+					wrapperEl.__nexlify_ro.disconnect();
+				} catch (e) {
+					console.warn("[Nexlify] Failed to disconnect ResizeObserver:", e);
+				}
+			}
+			if (wrapperEl.__nexlify_mo) {
+				try {
+					wrapperEl.__nexlify_mo.disconnect();
+				} catch (e) {
+					console.warn("[Nexlify] Failed to disconnect MutationObserver:", e);
+				}
+			}
+			nexlify_reports._tracked_wrappers.delete(wrapperEl);
+		}
+	});
+};
+
 $(document).on("page-change", function () {
 	frappe.after_ajax(() => {
 		setTimeout(nexlify_reports.setup_report, 300);
 		nexlify_reports.close_value_popup();
 		nexlify_reports.cleanup_orphaned_styles();
+		nexlify_reports.cleanup_detached_observers();
 	});
 });
 
@@ -929,8 +1029,9 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 	}
 
 	nexlify_reports.watch_container_resize(wrapperEl);
+	nexlify_reports._tracked_wrappers.add(wrapperEl);
 
-	const key = nexlify_reports.get_report_base_key() + ":dom-fallback:v9";
+	const key = nexlify_reports.get_report_base_key() + ":dom-fallback:" + NEXLIFY_CACHE_VERSION;
 	wrapperEl.__nexlify_persist_key = key;
 
 	const saved = nexlify_reports.load_widths(key);
@@ -949,8 +1050,14 @@ nexlify_reports.watch_uncovered_tables = function () {
 
 	const process_wrapper = (wrapperEl) => {
 		if (nexlifyResizing) return;
+
+		// already covered by its own dedicated MutationObserver/ResizeObserver
+		// (set in observe_datatable) — skip to avoid doing the same DOM sweep
+		// twice per scroll/mutation tick.
+		if (wrapperEl.__nexlify_observed) return;
+
 		if (wrapperEl.__nexlify_persist_key) {
-			nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
+			nexlify_reports.schedule_highlight(wrapperEl);
 			return;
 		}
 
