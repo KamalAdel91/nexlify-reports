@@ -627,16 +627,106 @@ nexlify_reports.hook_datatable_constructor = function () {
 		if (!OriginalDataTable || OriginalDataTable.__nexlify_wrapped) {
 			return OriginalDataTable;
 		}
+
+		// Helper: wrap columns formats in-place (idempotent)
+		function wrapColumnsFormats(cols) {
+			if (!Array.isArray(cols)) return;
+			cols.forEach(col => {
+				if (!col || typeof col === 'string') return; // ignore shorthand or falsy
+				if (col.__nexlify_format_wrapped) return;
+
+				const origFmt = typeof col.format === 'function' ? col.format : null;
+
+				col.format = function (value, row, column, data) {
+					// coerce to string for trim/inspect helpers
+					const raw = value === null || value === undefined ? "" : String(value);
+
+					let formatted;
+					try {
+						formatted = origFmt ? origFmt.call(this, value, row, column, data) : value;
+					} catch (e) {
+						console.warn('nexlify_reports: original column.format threw', e);
+						formatted = value;
+					}
+
+					let isZero = false;
+					let isNeg = false;
+					try {
+						if (window && window.nexlify_reports && typeof window.nexlify_reports.is_zero_value === 'function') {
+							isZero = !!window.nexlify_reports.is_zero_value(raw);
+						}
+					} catch (e) {
+						console.warn('nexlify_reports: is_zero_value threw', e);
+					}
+					try {
+						if (window && window.nexlify_reports && typeof window.nexlify_reports.is_negative_value === 'function') {
+							isNeg = !!window.nexlify_reports.is_negative_value(raw);
+						}
+					} catch (e) {
+						console.warn('nexlify_reports: is_negative_value threw', e);
+					}
+
+					if (isZero) return '-';
+					if (isNeg) return `<span class="nexlify-negative">${formatted}</span>`;
+					return formatted;
+				};
+
+				col.__nexlify_format_wrapped = true;
+			});
+		}
+
+		// Patch refresh on prototype once so future refresh(data, columns) calls get wrapped
+		if (!OriginalDataTable.__nexlify_refresh_patched) {
+			OriginalDataTable.__nexlify_refresh_patched = true;
+			const origRefresh = OriginalDataTable.prototype.refresh;
+			OriginalDataTable.prototype.refresh = function (data, columns) {
+				try {
+					if (Array.isArray(columns)) {
+						wrapColumnsFormats(columns);
+					} else if (this && this.options && Array.isArray(this.options.columns)) {
+						wrapColumnsFormats(this.options.columns);
+					}
+				} catch (e) {
+					console.warn('nexlify_reports: error wrapping columns on refresh', e);
+				}
+				return origRefresh.call(this, data, columns);
+			};
+		}
+
 		const Wrapped = function (wrapper, options) {
 			options = options || {};
 			options.layout = "fixed";
+
+			// Wrap initial options.columns before constructing the datatable
+			try {
+				wrapColumnsFormats(options.columns);
+			} catch (e) {
+				console.warn('nexlify_reports: error wrapping initial options.columns', e);
+			}
+
 			const instance = new OriginalDataTable(wrapper, options);
+
+			// preserve deferred setup (observe_datatable + bind_search_boxes)
 			setTimeout(() => {
-				nexlify_reports.observe_datatable(instance);
-				nexlify_reports.bind_search_boxes(instance);
+				try {
+					if (window.nexlify_reports && typeof window.nexlify_reports.observe_datatable === 'function') {
+						window.nexlify_reports.observe_datatable(instance);
+					}
+				} catch (e) {
+					console.error('nexlify_reports.observe_datatable error', e);
+				}
+				try {
+					if (window.nexlify_reports && typeof window.nexlify_reports.bind_search_boxes === 'function') {
+						window.nexlify_reports.bind_search_boxes(instance);
+					}
+				} catch (e) {
+					console.error('nexlify_reports.bind_search_boxes error', e);
+				}
 			}, 0);
+
 			return instance;
 		};
+
 		Wrapped.prototype = OriginalDataTable.prototype;
 		Object.setPrototypeOf(Wrapped, OriginalDataTable);
 		Wrapped.__nexlify_wrapped = true;
