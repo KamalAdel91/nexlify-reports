@@ -204,6 +204,23 @@
 .dt-filter {
     height: 22px !important;
     box-sizing: border-box !important;
+   border-radius: 5px !important;
+   transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.dt-filter:focus,
+.dt-filter:focus-visible {
+   outline: none !important;
+   border-color: var(--primary, #007bff) !important;
+   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12) !important;
+}
+
+.nexlify-floating-toolbar .btn:focus,
+.nexlify-floating-toolbar .btn:focus-visible,
+.nexlify-filter-popup .btn:focus,
+.nexlify-filter-popup .btn:focus-visible {
+   outline: 2px solid var(--primary, #007bff) !important;
+   outline-offset: 2px !important;
 }
 
 /* ---- Reports sometimes hardcode an inline text color (e.g. green for
@@ -229,12 +246,9 @@
 }
 
 
-/* ---- frappe-datatable sets a fixed INLINE width on .dt-scrollable at
-   init time (e.g. style="width: 1231px") and never updates it
-   afterward - this rule was here originally and got lost along the
-   way. !important is required to override an inline style, and this
-   targets .dt-scrollable specifically (NOT .datatable, which crashed
-   the library's own internal rendering when we tried that earlier). ---- */
+/* Keep native Frappe datatable sizing so the table can grow/shrink with the
+   available space instead of forcing a width that causes jitter during scroll. */
 .dt-scrollable {
-	width: 100% !important;
+   width: auto !important;
+   max-width: 100% !important;
 }

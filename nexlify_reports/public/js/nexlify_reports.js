@@ -1,5 +1,10 @@
 frappe.provide("nexlify_reports");
 
+// Default to native Frappe table behavior. The aggressive auto-fit logic keeps
+// forcing widths and reflowing while scrolling, which creates the jitter and
+// overlap issues seen in report pages.
+nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES = false;
+
 // ============================================================
 // Constants
 // ============================================================
@@ -383,8 +388,8 @@ nexlify_reports.ensure_floating_toolbar = function (wrapperEl) {
 
 	const $bar = $(
 		'<div class="nexlify-floating-toolbar">' +
-			'<button type="button" class="btn btn-xs btn-default nexlify-floating-autofit">' + __("Autofit") + '</button>' +
-			'<button type="button" class="btn btn-xs btn-default nexlify-floating-reset">' + __("Reset columns") + '</button>' +
+			'<button type="button" class="btn btn-xs btn-default nexlify-floating-autofit" title="' + __("Autofit columns") + '" aria-label="' + __("Autofit columns") + '">' + __("Autofit") + '</button>' +
+			'<button type="button" class="btn btn-xs btn-default nexlify-floating-reset" title="' + __("Reset columns to default") + '" aria-label="' + __("Reset columns to default") + '">' + __("Reset columns") + '</button>' +
 		'</div>'
 	);
 
@@ -508,7 +513,35 @@ nexlify_reports.observe_datatable = function (datatable) {
 	let sawEmpty = false;
 	let rafPending = false;
 
-	const observer = new MutationObserver(() => {
+	const observer = new MutationObserver((mutations) => {
+		// debug: collect mutation metadata when enabled
+		if (nexlify_reports._debug_enabled) {
+			try {
+				const now = Date.now();
+				const entry = {
+					ts: now,
+					mutations: mutations.length,
+					types: mutations.reduce((acc, m) => {
+						acc[m.type] = (acc[m.type] || 0) + 1; return acc;
+					}, {}),
+					rowCount: $(datatable.wrapper).find(".dt-row[data-row-index]").length
+				};
+				try {
+					const key = 'nexlify_reports_debug';
+					const raw = localStorage.getItem(key);
+					const arr = raw ? JSON.parse(raw) : [];
+					arr.push(entry);
+					if (arr.length > 200) arr.shift();
+					localStorage.setItem(key, JSON.stringify(arr));
+				} catch (e) {
+					console.warn('nexlify_reports: failed to persist debug entry', e);
+				}
+				console.info('[nexlify debug] mutations=', mutations.length, 'rowCount=', entry.rowCount, entry.types);
+			} catch (e) {
+				console.warn('nexlify_reports: debug observer threw', e);
+			}
+		}
+
 		if (rafPending) return;
 		rafPending = true;
 
@@ -540,7 +573,32 @@ nexlify_reports.observe_datatable = function (datatable) {
 		});
 	});
 
+	// observe mutations (basic)
 	observer.observe(bodyEl, { childList: true, subtree: true });
+
+	// additional characterData observer to capture text changes inside cells
+	if (!nexlify_reports._char_observers) nexlify_reports._char_observers = new WeakMap();
+	if (!nexlify_reports._char_observers.get(wrapperEl)) {
+		const charObserver = new MutationObserver((records) => {
+			if (!nexlify_reports._debug_enabled) return;
+			try {
+				const now = Date.now();
+				const entry = { ts: now, charRecords: records.length };
+				const key = 'nexlify_reports_debug';
+				const raw = localStorage.getItem(key);
+				const arr = raw ? JSON.parse(raw) : [];
+				arr.push(entry);
+				if (arr.length > 200) arr.shift();
+				localStorage.setItem(key, JSON.stringify(arr));
+				console.info('[nexlify debug] charRecords=', records.length);
+			} catch (e) {
+				console.warn('nexlify_reports: charObserver error', e);
+			}
+		});
+		charObserver.observe(bodyEl, { childList: true, subtree: true, characterData: true });
+		nexlify_reports._char_observers.set(wrapperEl, charObserver);
+	}
+
 	wrapperEl.__nexlify_mo = observer;
 };
 
@@ -549,6 +607,7 @@ nexlify_reports.observe_datatable = function (datatable) {
 // ============================================================
 
 nexlify_reports.watch_and_bind = function () {
+	if (!nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES) return;
 	setInterval(() => {
 		if (frappe.query_report && frappe.query_report.datatable) {
 			nexlify_reports.observe_datatable(frappe.query_report.datatable);
@@ -618,6 +677,7 @@ $(document).on("page-change", function () {
 // ============================================================
 
 nexlify_reports.hook_datatable_constructor = function () {
+	if (!nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES) return;
 	if (window.__nexlify_datatable_hooked) return;
 	window.__nexlify_datatable_hooked = true;
 
@@ -667,7 +727,14 @@ nexlify_reports.hook_datatable_constructor = function () {
 					}
 
 					if (isZero) return '-';
-					if (isNeg) return `<span class="nexlify-negative">${formatted}</span>`;
+
+					// Escape the formatted value before it is injected as HTML into
+					// the datatable cell. The value originates from the Report's raw
+					// column data (`origFmt` / `value`) which can contain user-controlled
+					// HTML. Injecting it unescaped would allow script execution on
+					// Report pages, so we normalize it through the same jQuery-based
+					// escaper already used elsewhere in this file.
+					if (isNeg) return `<span class="nexlify-negative">${nexlify_reports.esc_html(formatted)}</span>`;
 					return formatted;
 				};
 
@@ -1031,10 +1098,25 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 
 	const finish = function () {
 		$(inputEl).off("input.nexlifypopup");
+		$(document).off("keydown.nexlify-filter-keys");
 		nexlify_reports.mark_filter_active(datatable, colIndex, inputEl);
 		nexlify_reports.update_filter_summary(datatable, colIndex, inputEl);
 		nexlify_reports.close_value_popup();
 	};
+
+	$(document).on("keydown.nexlify-filter-keys", function (e) {
+		if ($(e.target).closest(".nexlify-filter-popup").length || e.target === inputEl) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				finish();
+				return;
+			}
+			if (e.key === "Enter" && e.target === inputEl) {
+				e.preventDefault();
+				$popup.find(".nexlify-filter-ok").trigger("click");
+			}
+		}
+	});
 
 	$popup.find(".nexlify-filter-cancel").on("click", function () {
 		finish();
@@ -1059,6 +1141,12 @@ nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
 	$popup.on("click", function (e) {
 		e.stopPropagation();
 	});
+
+	setTimeout(() => {
+		if (document.activeElement !== inputEl) {
+			inputEl.focus();
+		}
+	}, 0);
 
 	const scrollEl = $(datatable.wrapper).find(".dt-scrollable")[0];
 	const closeOnScroll = function (e) {
@@ -1133,6 +1221,7 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 };
 
 nexlify_reports.watch_uncovered_tables = function () {
+	if (!nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES) return;
 	if (window.__nexlify_fallback_watcher_started) return;
 	window.__nexlify_fallback_watcher_started = true;
 
@@ -1189,6 +1278,35 @@ nexlify_reports.watch_uncovered_tables = function () {
 // ============================================================
 // Boot
 // ============================================================
+
+// Debug helpers: enable to collect mutation/charData logs into localStorage under key 'nexlify_reports_debug'
+// Usage from Console: nexlify_reports._debug_enabled = true; // to enable
+// After reproducing: nexlify_reports.dump_debug_logs(); // prints logs
+// Clear: nexlify_reports.clear_debug_logs();
+
+nexlify_reports._debug_enabled = false;
+
+nexlify_reports.dump_debug_logs = function () {
+	try {
+		const raw = localStorage.getItem('nexlify_reports_debug');
+		const arr = raw ? JSON.parse(raw) : [];
+		console.log('nexlify_reports debug log entries:', arr.length);
+		console.table(arr.slice(-50));
+		return arr;
+	} catch (e) {
+		console.warn('nexlify_reports: failed to dump debug logs', e);
+		return null;
+	}
+};
+
+nexlify_reports.clear_debug_logs = function () {
+	try {
+		localStorage.removeItem('nexlify_reports_debug');
+		console.info('nexlify_reports: debug logs cleared');
+	} catch (e) {
+		console.warn('nexlify_reports: failed to clear debug logs', e);
+	}
+};
 
 $(document).ready(function () {
 	nexlify_reports.hook_datatable_constructor();
