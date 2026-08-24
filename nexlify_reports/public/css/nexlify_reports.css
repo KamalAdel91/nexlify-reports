@@ -120,32 +120,10 @@
    max-width: 100% !important;
 }
 
-/* ---- Sticky column header: keeps report column titles visible while the
-   user scrolls vertically through a tall table. Only applies when the
-   datatable is the scroll container (Report View / List View), so it is a
-   pure visual win and never forces a layout pass on its own. ---- */
-.datatable .dt-scrollable .dt-row-header {
-    position: sticky !important;
-    top: 0 !important;
-    z-index: 5 !important;
-    background: var(--control-bg, var(--panel-header-bg, #f4f6f9)) !important;
-}
-
-[data-theme="dark"] .datatable .dt-scrollable .dt-row-header {
-    background: var(--control-bg, #1f2937) !important;
-}
-
-/* ---- Softer zebra striping for long tables: keeps focus on the numbers
-   without fighting the datatable's own row styling. ---- */
-.datatable .dt-scrollable .dt-row[data-row-index]:nth-child(even) {
-    background: var(--fg-color, rgba(0,0,0,0.02)) !important;
-}
-
-[data-theme="dark"] .datatable .dt-scrollable .dt-row[data-row-index]:nth-child(even) {
-    background: var(--fg-color, rgba(255,255,255,0.02)) !important;
-}
-
-/* ---- Hover feedback so users can track the row they are reading. ---- */
+/* ---- Hover feedback (pointer devices only, avoids touch sticky-hover
+   repaints and keeps mouse users' row tracking). ---- */
+@media (hover: hover) and (pointer: fine) {
 .datatable .dt-scrollable .dt-row[data-row-index]:hover {
     background: var(--highlight-color, rgba(37,99,235,0.08)) !important;
+}
 }

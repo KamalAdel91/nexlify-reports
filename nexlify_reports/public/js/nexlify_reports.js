@@ -560,6 +560,15 @@ nexlify_reports.observe_datatable = function (datatable) {
 			if (sawEmpty) {
 				sawEmpty = false;
 				nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
+				// First fill handled. Widths are stable CSS rules and cell
+				// styling is applied at render time through the format
+				// wrapper, so this observer has nothing left to do.
+				// Disconnect it so fast scrolling never pays per-frame
+				// observer/mutation overhead again.
+				if (wrapperEl.__nexlify_mo) {
+					try { wrapperEl.__nexlify_mo.disconnect(); } catch (e) {}
+					wrapperEl.__nexlify_mo = null;
+				}
 			}
 		});
 	});
@@ -905,61 +914,6 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 	}
 };
 
-nexlify_reports.watch_uncovered_tables = function () {
-	if (!nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES) return;
-	if (window.__nexlify_fallback_watcher_started) return;
-	window.__nexlify_fallback_watcher_started = true;
-
-	const timers = new WeakMap();
-
-	const process_wrapper = (wrapperEl) => {
-		if (nexlifyResizing) return;
-
-		// already covered by its own dedicated MutationObserver/ResizeObserver
-		// (set in observe_datatable) — skip to avoid doing the same DOM sweep
-		// twice per scroll/mutation tick.
-		if (wrapperEl.__nexlify_observed) return;
-
-		if (wrapperEl.__nexlify_persist_key) {
-			nexlify_reports.schedule_highlight(wrapperEl);
-			return;
-		}
-
-		const rowCount = wrapperEl.querySelectorAll(".dt-row[data-row-index]").length;
-		if (rowCount < 1) return;
-
-		clearTimeout(timers.get(wrapperEl));
-		const t = setTimeout(() => {
-			nexlify_reports.ensure_table_covered(wrapperEl);
-		}, 200);
-		timers.set(wrapperEl, t);
-	};
-
-	let bodyRafScheduled = false;
-	let pendingTargets = new Set();
-
-	const bodyObserver = new MutationObserver((mutations) => {
-		mutations.forEach((m) => {
-			const el = m.target.nodeType === 1 ? m.target : m.target.parentElement;
-			if (!el) return;
-			const wrapperEl = el.closest ? el.closest(".datatable") : null;
-			if (wrapperEl) pendingTargets.add(wrapperEl);
-		});
-
-		if (!pendingTargets.size || bodyRafScheduled) return;
-		bodyRafScheduled = true;
-
-		requestAnimationFrame(() => {
-			bodyRafScheduled = false;
-			const targets = Array.from(pendingTargets);
-			pendingTargets = new Set();
-			targets.forEach(process_wrapper);
-		});
-	});
-
-	bodyObserver.observe(document.body, { childList: true, subtree: true });
-};
-
 // ============================================================
 // Boot
 // ============================================================
@@ -996,5 +950,4 @@ nexlify_reports.clear_debug_logs = function () {
 $(document).ready(function () {
 	nexlify_reports.hook_datatable_constructor();
 	nexlify_reports.watch_and_bind();
-	nexlify_reports.watch_uncovered_tables();
 });
