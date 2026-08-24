@@ -936,9 +936,12 @@ nexlify_reports.sweep_toolbars = function () {
 	// import DataTable directly - e.g. Bank Reconciliation and the
 	// Action dialog grid), giving them the floating Autofit / Reset
 	// toolbar and width handling with zero per-scroll-frame cost.
-	var tables = document.querySelectorAll(".datatable.dt-instance");
+	var tables = document.querySelectorAll(".datatable");
 	for (var i = 0; i < tables.length; i++) {
 		var el = tables[i];
+		// NOTE: class is dt-instance-N (numbered), so filter by regex
+		// instead of a .dt-instance selector which can never match.
+		if (!nexlify_reports.get_instance_class(el)) continue;
 		if (el.__nexlify_observed) continue;
 		if (el.querySelector(".nexlify-floating-toolbar")) continue;
 		if (!el.querySelector(".dt-row[data-row-index]")) continue;
