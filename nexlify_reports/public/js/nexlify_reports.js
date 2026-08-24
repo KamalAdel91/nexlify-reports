@@ -748,6 +748,20 @@ nexlify_reports.hook_datatable_constructor = function () {
 
 			const instance = new OriginalDataTable(wrapper, options);
 
+			// Re-attach per-instance setup so EVERY datatable gets covered:
+			// Report View, List View, dialog grids (the Action popup),
+			// Bank Reconciliation, etc. observe_datatable is idempotent
+			// (guarded by __nexlify_observed) and it re-installs the
+			// floating Autofit / Reset toolbar outside Report & List views.
+			setTimeout(() => {
+				try {
+					if (window.nexlify_reports && typeof window.nexlify_reports.observe_datatable === 'function') {
+						window.nexlify_reports.observe_datatable(instance);
+					}
+				} catch (e) {
+					console.error('nexlify_reports.observe_datatable error', e);
+				}
+			}, 0);
 
 			return instance;
 		};
