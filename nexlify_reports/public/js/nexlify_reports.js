@@ -1,9 +1,10 @@
 frappe.provide("nexlify_reports");
 
-// Default to native Frappe table behavior. The aggressive auto-fit logic keeps
-// forcing widths and reflowing while scrolling, which creates the jitter and
-// overlap issues seen in report pages.
-nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES = false;
+// Enable the layout fixes but keep them non-intrusive: column widths are
+// measured once per report and applied as stable CSS rules, so they do NOT
+// reflow while the user scrolls. The only case that re-measures is an
+// explicit "Autofit"/"Reset" click (or a column-set change).
+nexlify_reports.ENABLE_AUTO_LAYOUT_FIXES = true;
 
 // ============================================================
 // Constants
@@ -275,19 +276,12 @@ nexlify_reports.check_and_invalidate_on_resize = function (wrapperEl) {
 
 	const lastWidth = wrapperEl.__nexlify_last_container_width;
 
-	if (lastWidth && Math.abs(currentWidth - lastWidth) / lastWidth > 0.18) {
-		// Significant change (>18%) → clear saved widths and re-fit
-		if (wrapperEl.__nexlify_persist_key) {
-			try {
-				localStorage.removeItem("nexlify_col_widths:" + wrapperEl.__nexlify_persist_key);
-			} catch (e) {
-				console.warn("[Nexlify] Failed to clear cached widths:", e);
-			}
-		}
-		nexlify_reports.fit_columns(wrapperEl, {
-			persistKey: wrapperEl.__nexlify_persist_key || null
-		});
-	}
+	// NOTE: We deliberately do NOT re-measure/refit column widths when the
+	// container resizes. That observed re-measure on a >18% width swing was
+	// the source of the "table reflows while the user scrolls" jitter.
+	// Widths stay stable exactly as they were measured; the user can trigger
+	// a fresh measure via the "Autofit" button if they truly want one.
+	// (Win-dow size changes simply update our bookkeeping, nothing else.)
 
 	wrapperEl.__nexlify_last_container_width = currentWidth;
 };
@@ -509,7 +503,6 @@ nexlify_reports.observe_datatable = function (datatable) {
 	const bodyEl = $(datatable.wrapper).find(".dt-scrollable")[0];
 	if (!bodyEl) return;
 
-	let debounceTimer = null;
 	let sawEmpty = false;
 	let rafPending = false;
 
@@ -549,55 +542,30 @@ nexlify_reports.observe_datatable = function (datatable) {
 			rafPending = false;
 
 			const rowCount = $(datatable.wrapper).find(".dt-row[data-row-index]").length;
+
+			// Virtual scroll constantly swaps rows while the user scrolls, firing
+			// this observer many times. Re-fitting (or sweeping every cell) per
+			// swap is exactly what caused the jitter on large reports.
+			//
+			// 1) Highlight negative/zero cells only ONCE, on the first real data
+			//    fill (empty -> full), not on every subsequent row swap.
+			// 2) Never refit from here: saved widths stay stable for the row's
+			//    lifetime; a manual "Autofit"/"Reset" is the only re-measure.
+			//
 			if (rowCount <= 1) {
-				sawEmpty = true;
+				sawEmpty = true; // still empty -> wait for the first real fill
 				return;
 			}
 
-			// throttled/coalesced pass instead of a synchronous full sweep
-			// on every mutation batch (virtual scroll can fire many of these)
-			nexlify_reports.schedule_highlight(wrapperEl);
-
-			const currentSignature = nexlify_reports.get_column_signature(datatable);
-			const columnsChanged =
-				datatable.__nexlify_last_signature !== undefined &&
-				currentSignature !== datatable.__nexlify_last_signature;
-
-			if (!sawEmpty && !columnsChanged) return;
-
-			clearTimeout(debounceTimer);
-			debounceTimer = setTimeout(() => {
+			if (sawEmpty) {
 				sawEmpty = false;
-				nexlify_reports.apply_saved_or_autofit(datatable, wrapperEl);
-			}, 250);
+				nexlify_reports.highlight_negative_numbers_dom(wrapperEl);
+			}
 		});
 	});
 
 	// observe mutations (basic)
 	observer.observe(bodyEl, { childList: true, subtree: true });
-
-	// additional characterData observer to capture text changes inside cells
-	if (!nexlify_reports._char_observers) nexlify_reports._char_observers = new WeakMap();
-	if (!nexlify_reports._char_observers.get(wrapperEl)) {
-		const charObserver = new MutationObserver((records) => {
-			if (!nexlify_reports._debug_enabled) return;
-			try {
-				const now = Date.now();
-				const entry = { ts: now, charRecords: records.length };
-				const key = 'nexlify_reports_debug';
-				const raw = localStorage.getItem(key);
-				const arr = raw ? JSON.parse(raw) : [];
-				arr.push(entry);
-				if (arr.length > 200) arr.shift();
-				localStorage.setItem(key, JSON.stringify(arr));
-				console.info('[nexlify debug] charRecords=', records.length);
-			} catch (e) {
-				console.warn('nexlify_reports: charObserver error', e);
-			}
-		});
-		charObserver.observe(bodyEl, { childList: true, subtree: true, characterData: true });
-		nexlify_reports._char_observers.set(wrapperEl, charObserver);
-	}
 
 	wrapperEl.__nexlify_mo = observer;
 };
@@ -611,11 +579,9 @@ nexlify_reports.watch_and_bind = function () {
 	setInterval(() => {
 		if (frappe.query_report && frappe.query_report.datatable) {
 			nexlify_reports.observe_datatable(frappe.query_report.datatable);
-			nexlify_reports.bind_search_boxes(frappe.query_report.datatable);
 		}
 		if (window.cur_list && cur_list.datatable) {
 			nexlify_reports.observe_datatable(cur_list.datatable);
-			nexlify_reports.bind_search_boxes(cur_list.datatable);
 		}
 		nexlify_reports.setup_report();
 	}, 1200);
@@ -666,7 +632,6 @@ nexlify_reports.cleanup_detached_observers = function () {
 $(document).on("page-change", function () {
 	frappe.after_ajax(() => {
 		setTimeout(nexlify_reports.setup_report, 300);
-		nexlify_reports.close_value_popup();
 		nexlify_reports.cleanup_orphaned_styles();
 		nexlify_reports.cleanup_detached_observers();
 	});
@@ -728,13 +693,14 @@ nexlify_reports.hook_datatable_constructor = function () {
 
 					if (isZero) return '-';
 
-					// Escape the formatted value before it is injected as HTML into
-					// the datatable cell. The value originates from the Report's raw
-					// column data (`origFmt` / `value`) which can contain user-controlled
-					// HTML. Injecting it unescaped would allow script execution on
-					// Report pages, so we normalize it through the same jQuery-based
-					// escaper already used elsewhere in this file.
-					if (isNeg) return `<span class="nexlify-negative">${nexlify_reports.esc_html(formatted)}</span>`;
+					// The formatted value from a Report column is already HTML
+				// (e.g. `<div style="text-align: right">SAR -40,404.00</div>`). We
+				// sanitize it (keep layout markup, drop executable/event markup)
+				// and wrap it with the negative class — escaping the whole value
+				// here would print the raw `<div>` text into the cell instead of
+				// rendering it. Sanitize (not escape) is what keeps the display
+				// correct while still blocking active content like script/on*.
+				if (isNeg) return `<span class="nexlify-negative">${nexlify_reports.sanitize_html(formatted)}</span>`;
 					return formatted;
 				};
 
@@ -773,23 +739,6 @@ nexlify_reports.hook_datatable_constructor = function () {
 
 			const instance = new OriginalDataTable(wrapper, options);
 
-			// preserve deferred setup (observe_datatable + bind_search_boxes)
-			setTimeout(() => {
-				try {
-					if (window.nexlify_reports && typeof window.nexlify_reports.observe_datatable === 'function') {
-						window.nexlify_reports.observe_datatable(instance);
-					}
-				} catch (e) {
-					console.error('nexlify_reports.observe_datatable error', e);
-				}
-				try {
-					if (window.nexlify_reports && typeof window.nexlify_reports.bind_search_boxes === 'function') {
-						window.nexlify_reports.bind_search_boxes(instance);
-					}
-				} catch (e) {
-					console.error('nexlify_reports.bind_search_boxes error', e);
-				}
-			}, 0);
 
 			return instance;
 		};
@@ -905,287 +854,23 @@ nexlify_reports.esc_html = function (text) {
 	return $("<div>").text(text).html();
 };
 
-nexlify_reports.get_unique_values = function (datatable, colIndex) {
-	const rows = datatable.datamanager.rows;
-	const values = new Set();
-	rows.forEach((row) => {
-		const cell = row[colIndex];
-		if (cell) {
-			const text = cell.content !== undefined && cell.content !== null ? String(cell.content).trim() : "";
-			values.add(text);
-		}
-	});
-	return Array.from(values).sort((a, b) => a.localeCompare(b));
+// Renders a value that is ALREADY an HTML string (as produced by an original
+// Report column.format, e.g. `<div style="text-align: right">SAR -40,404.00</div>`)
+// safely: it KEEPS benign layout markup (div/span/style/tables/bold/etc.) so the
+// report reads as Frappe intended, but removes anything that could execute or
+// leak: script/iframe/object/embed/link/meta tags, all on* event attributes and
+// javascript: URLs. This is the correct choice for the negative-number branch,
+// where blindly escaping the whole value made the `<div>` show up as raw text.
+nexlify_reports.sanitize_html = function (html) {
+	if (html === null || html === undefined) return "";
+	return String(html)
+		.replace(/<\s*(script|iframe|object|embed|meta|link|style)[^>]*>/gi, "")
+		.replace(/<\s*\/\s*(script|iframe|object|embed|meta|link)\s*>/gi, "")
+		.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+		.replace(/(\s*href\s*=\s*|src\s*=\s*)("|'|)\s*javascript:[^"'>]*("|'|)(?=\s|>)/gi, "")
+		.replace(/<\s*\/?\s*style\s*>/gi, ""); // discard embedded <style> blocks too
 };
 
-nexlify_reports.apply_combined_filter = function (datatable, rows, textFilters, dm) {
-	const valueFilters = datatable.__nexlify_value_filters || {};
-	const allIndices = rows.map((r, i) => i);
-
-	if (Object.keys(valueFilters).length === 0) {
-		return Promise.resolve(allIndices);
-	}
-
-	return Promise.resolve(
-		allIndices.filter((rowIndex) => {
-			return Object.keys(valueFilters).every((colIndex) => {
-				const allowedSet = valueFilters[colIndex];
-				const cell = rows[rowIndex][colIndex];
-				const text = cell && cell.content !== undefined && cell.content !== null ? String(cell.content).trim() : "";
-				return allowedSet.has(text);
-			});
-		})
-	);
-};
-
-nexlify_reports.ensure_filter_override = function (datatable) {
-	if (!datatable || datatable.__nexlify_filter_override_added) return;
-	datatable.__nexlify_filter_override_added = true;
-	datatable.__nexlify_value_filters = {};
-
-	datatable.datamanager.options.filterRows = function (rows, filters, dm) {
-		return nexlify_reports.apply_combined_filter(datatable, rows, filters, dm);
-	};
-};
-
-nexlify_reports.trigger_refilter = function (datatable) {
-	if (datatable.columnmanager && datatable.columnmanager.applyFilter) {
-		datatable.columnmanager.applyFilter(datatable.columnmanager.getAppliedFilters());
-	}
-};
-
-nexlify_reports.update_filter_summary = function (datatable, colIndex, inputEl) {
-	const filterSet = datatable.__nexlify_value_filters[colIndex];
-	if (!filterSet) {
-		inputEl.value = "";
-		return;
-	}
-	if (filterSet.size === 1) {
-		const only = Array.from(filterSet)[0];
-		inputEl.value = only === "" ? __("(blank)") : only;
-	} else {
-		inputEl.value = __("Multiple select") + " (" + filterSet.size + ")";
-	}
-};
-
-nexlify_reports.close_value_popup = function () {
-	$(".nexlify-filter-popup").remove();
-	$(document).off("click.nexlify-filter-close");
-};
-
-nexlify_reports.mark_filter_active = function (datatable, colIndex, inputEl) {
-	const isActive = !!datatable.__nexlify_value_filters[colIndex];
-	$(inputEl).toggleClass("nexlify-filter-active", isActive);
-};
-
-nexlify_reports.render_popup_list = function ($popup, allValues, checkedSet, searchText) {
-	const $list = $popup.find(".nexlify-filter-list");
-	$list.empty();
-
-	const visibleValues = allValues.filter(
-		(v) => !searchText || v.toLowerCase().includes(searchText.toLowerCase())
-	);
-
-	visibleValues.forEach((v) => {
-		const checked = checkedSet.has(v) ? "checked" : "";
-		const label = v === "" ? __("(blank)") : nexlify_reports.esc_html(v);
-		const titleAttr = v === "" ? "" : nexlify_reports.esc_html(v);
-		$list.append(
-			`<label><input type="checkbox" class="nexlify-value-cb" value="${nexlify_reports.esc_html(v)}" ${checked}> <span title="${titleAttr}">${label}</span></label>`
-		);
-	});
-
-	const allVisibleChecked = visibleValues.length > 0 && visibleValues.every((v) => checkedSet.has(v));
-	$popup.find(".nexlify-select-all").prop("checked", allVisibleChecked);
-
-	return visibleValues;
-};
-
-nexlify_reports.open_value_popup = function (datatable, colIndex, inputEl) {
-	nexlify_reports.close_value_popup();
-
-	const allValues = nexlify_reports.get_unique_values(datatable, colIndex);
-	const existingFilter = datatable.__nexlify_value_filters[colIndex];
-	let checkedSet = existingFilter ? new Set(existingFilter) : new Set(allValues);
-	let preSearchSet = null;
-
-	inputEl.value = "";
-
-	const rect = inputEl.getBoundingClientRect();
-	const isRTL =
-		(document.documentElement.dir || "").toLowerCase() === "rtl" ||
-		(document.body.dir || "").toLowerCase() === "rtl";
-
-	const $popup = $(`
-		<div class="nexlify-filter-popup">
-			<label class="nexlify-select-all-row">
-				<input type="checkbox" class="nexlify-select-all" checked> <b class="nexlify-select-all-label">${__("Select All")}</b>
-			</label>
-			<label class="nexlify-add-selection-row" style="display:none;">
-				<input type="checkbox" class="nexlify-add-selection"> ${__("Add current selection to filter")}
-			</label>
-			<div class="nexlify-filter-list"></div>
-			<div class="nexlify-filter-actions">
-				<button type="button" class="btn btn-default btn-xs nexlify-filter-clear">${__("Clear")}</button>
-				<button type="button" class="btn btn-default btn-xs nexlify-filter-cancel">${__("Cancel")}</button>
-				<button type="button" class="btn btn-primary btn-xs nexlify-filter-ok">${__("OK")}</button>
-			</div>
-		</div>
-	`);
-
-	const popupWidth = 230;
-	let leftPos = isRTL ? rect.right - popupWidth : rect.left;
-	const maxLeft = window.innerWidth - popupWidth - 8;
-	if (leftPos > maxLeft) leftPos = Math.max(maxLeft, 8);
-	if (leftPos < 8) leftPos = 8;
-
-	$popup.css({
-		top: rect.bottom + 2 + "px",
-		left: leftPos + "px",
-	});
-
-	$("body").append($popup);
-
-	let visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
-
-	$(inputEl).on("input.nexlifypopup", function () {
-		const searchText = this.value;
-
-		if (searchText && preSearchSet === null) {
-			preSearchSet = new Set(checkedSet);
-		}
-		if (!searchText && preSearchSet !== null) {
-			checkedSet = new Set(preSearchSet);
-			preSearchSet = null;
-		}
-
-		const newVisible = allValues.filter(
-			(v) => !searchText || v.toLowerCase().includes(searchText.toLowerCase())
-		);
-
-		if (searchText) {
-			checkedSet = new Set(newVisible);
-		}
-
-		$popup.find(".nexlify-select-all-label").text(searchText ? __("Select All Search Results") : __("Select All"));
-		$popup.find(".nexlify-add-selection-row").toggle(!!searchText);
-		visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, searchText);
-	});
-
-	$popup.on("change", ".nexlify-value-cb", function () {
-		if (this.checked) {
-			checkedSet.add(this.value);
-		} else {
-			checkedSet.delete(this.value);
-		}
-		const allVisibleChecked = visibleValues.length > 0 && visibleValues.every((v) => checkedSet.has(v));
-		$popup.find(".nexlify-select-all").prop("checked", allVisibleChecked);
-	});
-
-	$popup.on("change", ".nexlify-select-all", function () {
-		if (this.checked) {
-			visibleValues.forEach((v) => checkedSet.add(v));
-		} else {
-			visibleValues.forEach((v) => checkedSet.delete(v));
-		}
-		nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
-	});
-
-	$popup.find(".nexlify-filter-clear").on("click", function () {
-		checkedSet.clear();
-		visibleValues = nexlify_reports.render_popup_list($popup, allValues, checkedSet, inputEl.value);
-	});
-
-	const finish = function () {
-		$(inputEl).off("input.nexlifypopup");
-		$(document).off("keydown.nexlify-filter-keys");
-		nexlify_reports.mark_filter_active(datatable, colIndex, inputEl);
-		nexlify_reports.update_filter_summary(datatable, colIndex, inputEl);
-		nexlify_reports.close_value_popup();
-	};
-
-	$(document).on("keydown.nexlify-filter-keys", function (e) {
-		if ($(e.target).closest(".nexlify-filter-popup").length || e.target === inputEl) {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				finish();
-				return;
-			}
-			if (e.key === "Enter" && e.target === inputEl) {
-				e.preventDefault();
-				$popup.find(".nexlify-filter-ok").trigger("click");
-			}
-		}
-	});
-
-	$popup.find(".nexlify-filter-cancel").on("click", function () {
-		finish();
-	});
-
-	$popup.find(".nexlify-filter-ok").on("click", function () {
-		const addMode = $popup.find(".nexlify-add-selection").is(":checked");
-		let finalSet = checkedSet;
-		if (preSearchSet !== null && addMode) {
-			finalSet = new Set([...preSearchSet, ...checkedSet]);
-		}
-
-		if (finalSet.size === 0 || finalSet.size === allValues.length) {
-			delete datatable.__nexlify_value_filters[colIndex];
-		} else {
-			datatable.__nexlify_value_filters[colIndex] = new Set(finalSet);
-		}
-		nexlify_reports.trigger_refilter(datatable);
-		finish();
-	});
-
-	$popup.on("click", function (e) {
-		e.stopPropagation();
-	});
-
-	setTimeout(() => {
-		if (document.activeElement !== inputEl) {
-			inputEl.focus();
-		}
-	}, 0);
-
-	const scrollEl = $(datatable.wrapper).find(".dt-scrollable")[0];
-	const closeOnScroll = function (e) {
-		if (e && e.target && $popup.get(0).contains(e.target)) return;
-		finish();
-	};
-	if (scrollEl) {
-		scrollEl.addEventListener("scroll", closeOnScroll, { once: true });
-	}
-	window.addEventListener("scroll", closeOnScroll, { once: true });
-
-	setTimeout(() => {
-		$(document).on("click.nexlify-filter-close", function (e) {
-			if (!$(e.target).closest(".nexlify-filter-popup").length && e.target !== inputEl) {
-				finish();
-			}
-		});
-	}, 0);
-};
-
-nexlify_reports.bind_search_boxes = function (datatable) {
-	nexlify_reports.ensure_filter_override(datatable);
-
-	const $wrapper = $(datatable.wrapper);
-
-	$wrapper.find(".dt-filter").each(function () {
-		if ($(this).data("nexlify-bound")) return;
-		$(this).data("nexlify-bound", true);
-
-		const colIndex = this.dataset.colIndex;
-
-		$(this).on("focus", function () {
-			nexlify_reports.open_value_popup(datatable, colIndex, this);
-		});
-
-		nexlify_reports.mark_filter_active(datatable, colIndex, this);
-		nexlify_reports.update_filter_summary(datatable, colIndex, this);
-	});
-};
 
 // ============================================================
 // Safety net

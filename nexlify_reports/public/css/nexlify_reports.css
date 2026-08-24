@@ -16,137 +16,6 @@
     text-align: center !important;
 }
 
-/* ---- Filter popup: fixed ---- */
-.nexlify-filter-popup {
-    position: fixed !important;
-    z-index: 9999 !important;
-    background: var(--bg-color) !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-    padding: 0;
-    min-width: 220px;
-    max-width: 270px;
-    max-height: 340px;
-    display: flex;
-    flex-direction: column;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 12px;
-    animation: nr-pop 0.12s ease-out;
-    overflow: hidden;
-}
-
-@keyframes nr-pop {
-    from { opacity: 0; transform: translateY(-4px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-.nexlify-filter-popup .nexlify-select-all-row,
-.nexlify-filter-popup .nexlify-add-selection-row {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-color);
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.1s;
-    color: var(--text-color);
-}
-
-.nexlify-filter-popup .nexlify-select-all-row:hover,
-.nexlify-filter-popup .nexlify-add-selection-row:hover {
-    background: var(--bg-color-hover, rgba(0,0,0,0.04));
-}
-
-.nexlify-filter-popup .nexlify-select-all-label {
-    font-weight: 600;
-}
-
-.nexlify-filter-popup .nexlify-filter-list {
-    overflow-y: auto;
-    flex: 1;
-    padding: 4px 0;
-    max-height: 200px;
-}
-
-.nexlify-filter-popup .nexlify-filter-list label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 5px 12px;
-    cursor: pointer;
-    transition: background 0.1s;
-    font-size: 12px;
-    color: var(--text-color);
-}
-
-.nexlify-filter-popup .nexlify-filter-list label:hover {
-    background: var(--bg-color-hover, rgba(0,0,0,0.04));
-}
-
-.nexlify-filter-popup .nexlify-filter-list input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
-    accent-color: var(--primary);
-    flex-shrink: 0;
-    cursor: pointer;
-}
-
-.nexlify-filter-popup .nexlify-filter-list label span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.nexlify-filter-popup .nexlify-filter-actions {
-    display: flex;
-    gap: 5px;
-    padding: 8px 12px;
-    border-top: 1px solid var(--border-color);
-    justify-content: flex-end;
-}
-
-.nexlify-filter-popup .nexlify-filter-actions .btn {
-    border-radius: 5px !important;
-    font-size: 11px !important;
-    font-weight: 600 !important;
-    padding: 4px 12px !important;
-    border: 1px solid var(--border-color) !important;
-    cursor: pointer;
-    transition: all 0.1s;
-}
-
-.nexlify-filter-popup .nexlify-filter-clear {
-    background: var(--red) !important;
-    color: #fff !important;
-    border-color: var(--red) !important;
-    margin-right: auto;
-}
-
-.nexlify-filter-popup .nexlify-filter-clear:hover {
-    opacity: 0.85;
-}
-
-.nexlify-filter-popup .nexlify-filter-cancel {
-    background: var(--bg-color) !important;
-    color: var(--text-color) !important;
-}
-
-.nexlify-filter-popup .nexlify-filter-cancel:hover {
-    background: var(--bg-color-hover, rgba(0,0,0,0.06)) !important;
-}
-
-.nexlify-filter-popup .nexlify-filter-ok {
-    background: var(--primary) !important;
-    color: #fff !important;
-    border-color: var(--primary) !important;
-}
-
-.nexlify-filter-popup .nexlify-filter-ok:hover {
-    opacity: 0.85;
-}
-
 /* ---- Thin scrollbar ---- */
 .datatable .dt-scrollable::-webkit-scrollbar {
     width: 6px;
@@ -216,9 +85,7 @@
 }
 
 .nexlify-floating-toolbar .btn:focus,
-.nexlify-floating-toolbar .btn:focus-visible,
-.nexlify-filter-popup .btn:focus,
-.nexlify-filter-popup .btn:focus-visible {
+.nexlify-floating-toolbar .btn:focus-visible {
    outline: 2px solid var(--primary, #007bff) !important;
    outline-offset: 2px !important;
 }
@@ -251,4 +118,34 @@
 .dt-scrollable {
    width: auto !important;
    max-width: 100% !important;
+}
+
+/* ---- Sticky column header: keeps report column titles visible while the
+   user scrolls vertically through a tall table. Only applies when the
+   datatable is the scroll container (Report View / List View), so it is a
+   pure visual win and never forces a layout pass on its own. ---- */
+.datatable .dt-scrollable .dt-row-header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 5 !important;
+    background: var(--control-bg, var(--panel-header-bg, #f4f6f9)) !important;
+}
+
+[data-theme="dark"] .datatable .dt-scrollable .dt-row-header {
+    background: var(--control-bg, #1f2937) !important;
+}
+
+/* ---- Softer zebra striping for long tables: keeps focus on the numbers
+   without fighting the datatable's own row styling. ---- */
+.datatable .dt-scrollable .dt-row[data-row-index]:nth-child(even) {
+    background: var(--fg-color, rgba(0,0,0,0.02)) !important;
+}
+
+[data-theme="dark"] .datatable .dt-scrollable .dt-row[data-row-index]:nth-child(even) {
+    background: var(--fg-color, rgba(255,255,255,0.02)) !important;
+}
+
+/* ---- Hover feedback so users can track the row they are reading. ---- */
+.datatable .dt-scrollable .dt-row[data-row-index]:hover {
+    background: var(--highlight-color, rgba(37,99,235,0.08)) !important;
 }
