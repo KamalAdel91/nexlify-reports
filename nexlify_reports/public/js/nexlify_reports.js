@@ -592,6 +592,7 @@ nexlify_reports.watch_and_bind = function () {
 		if (window.cur_list && cur_list.datatable) {
 			nexlify_reports.observe_datatable(cur_list.datatable);
 		}
+		nexlify_reports.sweep_toolbars();
 		nexlify_reports.setup_report();
 	}, 1200);
 	// NOTE: this interval keeps running for the lifetime of the page even
@@ -925,6 +926,23 @@ nexlify_reports.ensure_table_covered = function (wrapperEl) {
 		nexlify_reports.apply_saved_widths(wrapperEl, saved);
 	} else {
 		nexlify_reports.fit_columns(wrapperEl, { persistKey: key });
+	}
+};
+
+nexlify_reports.sweep_toolbars = function () {
+	// Cheap safety net replacing the old document.body MutationObserver.
+	// One bounded query per poll tick (1.2s) covers datatables that were
+	// NOT constructed through the window.DataTable hook (bundles that
+	// import DataTable directly - e.g. Bank Reconciliation and the
+	// Action dialog grid), giving them the floating Autofit / Reset
+	// toolbar and width handling with zero per-scroll-frame cost.
+	var tables = document.querySelectorAll(".datatable.dt-instance");
+	for (var i = 0; i < tables.length; i++) {
+		var el = tables[i];
+		if (el.__nexlify_observed) continue;
+		if (el.querySelector(".nexlify-floating-toolbar")) continue;
+		if (!el.querySelector(".dt-row[data-row-index]")) continue;
+		nexlify_reports.ensure_table_covered(el);
 	}
 };
 
