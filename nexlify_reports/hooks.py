@@ -5,6 +5,9 @@ app_description = "Enhanced report views styling for ERPNext"
 app_email = "Kamal.adel@outlook.com"
 app_license = "mit"
 
+# Kill-switch flag exposed to desk via frappe.boot
+boot_session = "nexlify_reports.boot.boot_session"
+
 # Apps
 # ------------------
 

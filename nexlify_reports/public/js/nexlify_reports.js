@@ -1,5 +1,20 @@
 frappe.provide("nexlify_reports");
 
+// ============================================================
+// Kill-switch: Nexlify Reports Settings.enabled (Single DocType)
+// ============================================================
+// boot_session injects frappe.boot.nexlify_reports_enabled (0/1).
+// Missing key => enabled (fail-open for fresh installs).
+if (frappe.boot && frappe.boot.nexlify_reports_enabled === 0) {
+	// Fully stand down: strip our stylesheet so visuals switch off too.
+	try {
+		document.querySelectorAll('link[rel="stylesheet"][href*="/assets/nexlify_reports/css/"]').forEach(function (l) {
+			l.disabled = true;
+			if (l.parentNode) l.parentNode.removeChild(l);
+		});
+	} catch (e) {}
+} else {
+
 // Enable the layout fixes but keep them non-intrusive: column widths are
 // measured once per report and applied as stable CSS rules, so they do NOT
 // reflow while the user scrolls. The only case that re-measures is an
@@ -949,6 +964,29 @@ nexlify_reports.sweep_toolbars = function () {
 	}
 };
 
+nexlify_reports.init_scroll_hover_suppression = function () {
+	// Rows sliding under a stationary cursor retrigger :hover every frame
+	// during fast scrolling - a real micro-jank source. While scrolling we
+	// add body.nexlify-is-scrolling which disables the hover rule (see
+	// CSS), restoring it 150ms after scrolling stops.
+	if (window.__nexlify_scroll_hover_wired) return;
+	window.__nexlify_scroll_hover_wired = true;
+	var t = null;
+	document.addEventListener(
+		"scroll",
+		function (e) {
+			var el = e.target;
+			if (!(el && el.classList && el.classList.contains("dt-scrollable"))) return;
+			document.body.classList.add("nexlify-is-scrolling");
+			clearTimeout(t);
+			t = setTimeout(function () {
+				document.body.classList.remove("nexlify-is-scrolling");
+			}, 150);
+		},
+		{ capture: true, passive: true }
+	);
+};
+
 // ============================================================
 // Boot
 // ============================================================
@@ -984,5 +1022,7 @@ nexlify_reports.clear_debug_logs = function () {
 
 $(document).ready(function () {
 	nexlify_reports.hook_datatable_constructor();
+	nexlify_reports.init_scroll_hover_suppression();
 	nexlify_reports.watch_and_bind();
 });
+}
