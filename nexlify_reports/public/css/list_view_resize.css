@@ -1,0 +1,13 @@
+.nexlify-list-resize-handle {
+	position: absolute;
+	top: 0;
+	right: -3px;
+	width: 6px;
+	height: 100%;
+	cursor: col-resize;
+	z-index: 5;
+}
+.nexlify-list-resize-handle:hover {
+	background: var(--primary-color, #5e64ff);
+	opacity: 0.4;
+}

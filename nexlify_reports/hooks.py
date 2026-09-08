@@ -28,8 +28,14 @@ boot_session = "nexlify_reports.boot.boot_session"
 # ------------------
 
 # include js, css files in header of desk.html
-app_include_css = "/assets/nexlify_reports/css/nexlify_reports.css"
-app_include_js = "/assets/nexlify_reports/js/nexlify_reports.js"
+app_include_js = [
+    "/assets/nexlify_reports/js/nexlify_reports.js",
+    "/assets/nexlify_reports/js/list_view_resize.js",
+]
+app_include_css = [
+    "/assets/nexlify_reports/css/nexlify_reports.css",
+    "/assets/nexlify_reports/css/list_view_resize.css",
+]
 
 # include js, css files in header of web template
 # web_include_css = "/assets/nexlify_reports/css/nexlify_reports.css"
