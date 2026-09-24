@@ -127,3 +127,24 @@ body:not(.nexlify-is-scrolling) .datatable .dt-scrollable .dt-row[data-row-index
     background: var(--highlight-color, rgba(37,99,235,0.08)) !important;
 }
 }
+
+/* Wrap text in Child Tables (read mode only, not while editing a row) */
+.form-grid .grid-body .grid-static-col {
+	height: auto !important;
+	min-height: 34px;
+	overflow: hidden !important;
+	min-width: 0;
+}
+
+.form-grid .grid-body .grid-static-col .static-area,
+.form-grid .grid-body .grid-static-col .static-area *:not(.indicator-pill) {
+	white-space: normal !important;
+	text-overflow: clip !important;
+	overflow-wrap: anywhere;
+	max-width: 100%;
+}
+
+.form-grid .grid-body .grid-row > .data-row {
+	align-items: stretch;
+	height: auto !important;
+}

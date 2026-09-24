@@ -11,3 +11,25 @@
 	background: var(--primary-color, #5e64ff);
 	opacity: 0.4;
 }
+/* Wrap text in list view columns — body rows only */
+.list-row-container .level.list-row .level-left > .list-row-col {
+	overflow: hidden !important;
+	min-width: 0;
+}
+
+.list-row-container .level.list-row .level-left > .list-row-col *:not(.indicator-pill):not(input) {
+	white-space: normal !important;
+	text-overflow: clip !important;
+	overflow-wrap: anywhere;
+	min-width: 0;
+	max-width: 100%;
+}
+
+.list-row-container .level.list-row .level-left > .list-row-col .level-item {
+	flex-shrink: 1 !important;
+}
+
+.list-row-container .level.list-row {
+	align-items: flex-start;
+	min-height: unset;
+}
