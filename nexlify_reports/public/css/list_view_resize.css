@@ -33,3 +33,12 @@
 	align-items: flex-start;
 	min-height: unset;
 }
+
+/* handle fully inside the column so the header's overflow:hidden doesn't clip it */
+.nexlify-list-resize-handle { right: 0 !important; }
+
+body.nexlify-col-resizing,
+body.nexlify-col-resizing * {
+	cursor: col-resize !important;
+	user-select: none !important;
+}
