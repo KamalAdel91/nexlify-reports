@@ -11,7 +11,7 @@ frappe.provide("nexlify_reports.list_resize");
 	}
 
 	function current() {
-		const route = frappe.get_route();
+		const route = frappe.get_route() || [];
 		if (route[0] !== "List" || (route[2] && route[2] !== "List")) return null;
 		if (!window.cur_list || cur_list.doctype !== route[1] || !cur_list.$result) return null;
 		const wrap = cur_list.$result.closest(".frappe-list")[0];

@@ -129,7 +129,7 @@ body:not(.nexlify-is-scrolling) .datatable .dt-scrollable .dt-row[data-row-index
 }
 
 /* Wrap text in Child Tables (read mode only, not while editing a row) */
-.form-grid .grid-body .grid-static-col {
+.form-grid .grid-body .grid-static-col:not(.row-index) {
 	height: auto !important;
 	min-height: 34px;
 	overflow: hidden !important;
