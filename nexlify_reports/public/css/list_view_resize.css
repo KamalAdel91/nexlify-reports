@@ -42,3 +42,11 @@ body.nexlify-col-resizing * {
 	cursor: col-resize !important;
 	user-select: none !important;
 }
+
+/* Status pills stay on one line (the wrap rule above must not reach the text inside them) */
+.list-row-container .level.list-row .level-left > .list-row-col .indicator-pill,
+.list-row-container .level.list-row .level-left > .list-row-col .indicator-pill span {
+	white-space: nowrap !important;
+	text-overflow: ellipsis !important;
+	overflow: hidden !important;
+}
