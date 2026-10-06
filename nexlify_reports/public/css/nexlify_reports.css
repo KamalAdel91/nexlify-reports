@@ -148,3 +148,78 @@ body:not(.nexlify-is-scrolling) .datatable .dt-scrollable .dt-row[data-row-index
 	align-items: stretch;
 	height: auto !important;
 }
+
+/* ---- Child table: currency symbol in the row being edited (Frappe 16.50+)
+   Frappe draws the symbol over the input with room for one character only,
+   so 2-3 character symbols (EGP, SAR) cover the amount. Put the symbol beside
+   the input; the wrapper takes over the background and focus ring. ---- */
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value {
+    background-color: var(--control-bg);
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value:has(> .form-control:disabled, > .form-control[readonly]) {
+    background-color: var(--input-disabled-bg);
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value:has(> .form-control.invalid) {
+    background-color: var(--error-bg);
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value:focus-within {
+    box-shadow: inset 0 0 0 2px rgba(124, 124, 124, 0.25);
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value > .grid-currency-prefix,
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value > .grid-currency-suffix {
+    position: static;
+    flex: none;
+    white-space: nowrap;
+    unicode-bidi: plaintext;
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value > .grid-currency-prefix {
+    padding-inline-start: 8px;
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value > .grid-currency-suffix {
+    padding-inline-end: 8px;
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value > .form-control {
+    flex: 1 1 0;
+    min-width: 0;
+    background-color: transparent;
+    box-shadow: none;
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value:not(.grid-currency-symbol-right) > .form-control {
+    padding-inline-start: 4px;
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value.grid-currency-symbol-right > .form-control {
+    padding-inline-end: 4px;
+}
+
+/* ---- Child table: when a cell wraps to more lines, centre every cell of
+   the row vertically (checkbox, No. and values) ---- */
+.form-grid .grid-body .data-row > .row-check,
+.form-grid .grid-body .data-row > .row-index {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    justify-content: safe center;
+}
+.form-grid .grid-body .data-row > .row-check {
+    align-items: center;
+}
+.form-grid .grid-body .data-row > .row-check > .grid-row-check {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+.form-grid .grid-body .data-row > .row-index {
+    height: auto !important;
+    min-height: 43px;
+}
+.form-grid .grid-body .data-row:not(.editable-row) > .grid-static-col[data-fieldname]:not([data-fieldtype="Button"]) {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    justify-content: safe center;
+}
+.form-grid .grid-body .data-row:not(.editable-row) > .grid-static-col[data-fieldname] > .static-area {
+    flex-shrink: 0;
+}
+.form-grid .grid-row .grid-currency-input.grid-currency-has-value:not(.grid-currency-symbol-right) > .form-control {
+    text-align: end;
+}
